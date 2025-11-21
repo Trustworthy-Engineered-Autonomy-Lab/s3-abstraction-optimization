@@ -2,22 +2,127 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.animation import FuncAnimation, PillowWriter
+import torch
+import torch.nn as nn
+from pathlib import Path
 
-CENTER = np.array([7.0, 7.0])
+# MountainCar open-loop dynamics
+def mc_ol_dynamics(state, action):
+    p, v = state
+    v_next = v + 0.001*(action - 1) - 0.0025*np.cos(3*p)
+    v_next = np.clip(v_next, -0.07, 0.07)
+    p_next = p + v_next
+    p_next = np.clip(p_next, -1.2, 0.6)
+    if p_next <= -1.2 and v_next < 0:
+        v_next = 0.0
+    return np.array([p_next, v_next])
 
-# Define the mountaincar dynamics
-def dynamics(state):
-    x, v = state
-    new_v = v + 0.001 * np.cos(3 * x) - 0.0025 * np.sign(v)
-    new_v = np.clip(new_v, -0.07, 0.07)
-    new_x = x + new_v
-    new_x = np.clip(new_x, -1.2, 0.6)
-    if new_x == -1.2 and new_v < 0:
-        new_v = 0.0
-    return np.array([new_x, new_v])
+# DQN policy
+class DQN(nn.Module):
 
+    # Initialize the neural network
+    def __init__(self, state_dim, action_dim, hidden_dim):
+        super(DQN, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim), # Input layer
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), # Hidden layer
+            nn.ReLU(),
+            nn.Linear(hidden_dim, action_dim) # Output layer
+        )
 
+    def forward(self, x):
+        return self.net(x)
 
+# Lazy-load cached policy (avoid re-instantiation)
+_DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+_POLICY_CACHE = None
+_POLICY_PATH = Path(__file__).resolve().parent / 'policy.pth'
+
+def get_policy():
+    global _POLICY_CACHE
+    if _POLICY_CACHE is None:
+        net = DQN(2, 3, 128).to(_DEVICE)
+        state_dict = torch.load(str(_POLICY_PATH), map_location=_DEVICE)
+        net.load_state_dict(state_dict)
+        net.eval()
+        _POLICY_CACHE = net
+    return _POLICY_CACHE
+
+def policy_action(state):
+    net = get_policy()
+    with torch.no_grad():
+        s = torch.as_tensor(state, dtype=torch.float32, device=_DEVICE).unsqueeze(0)
+        q = net(s)
+        return int(q.argmax(dim=1).item())  # 0,1,2
+
+# Closed-loop dynamics using greedy policy (no need to pass network each call)
+def mc_cl_dynamics(x):
+    x_np = np.asarray(x, dtype=np.float64)
+    a_idx = policy_action(x_np)
+    return mc_ol_dynamics(x_np, a_idx)
+
+# Approximate Jacobian of closed-loop dynamics (holds action fixed)
+def approx_jacobian_mc_cl(x, eps=1e-5):
+    x = np.asarray(x, dtype=float)
+    a = policy_action(x)  # action chosen at base state
+    base = mc_ol_dynamics(x, a)
+    J = np.zeros((2, 2))
+    for k in range(2):
+        x_pert = x.copy()
+        x_pert[k] += eps
+        pert = mc_ol_dynamics(x_pert, a)  # keep same action to avoid discontinuities
+        J[:, k] = (pert - base) / eps
+    return J
+
+# A "meta" objective function counting average number of successor cells
+def _point_to_cell(x, y, params1, params2):
+    if x < params1[0] or x > params1[-1] or y < params2[0] or y > params2[-1]:
+        return None
+    i = np.searchsorted(params1, x, side='right') - 1
+    j = np.searchsorted(params2, y, side='right') - 1
+    # Ensure indices refer to a valid cell (exclude last line index)
+    if i < 0 or i >= len(params1) - 1 or j < 0 or j >= len(params2) - 1:
+        return None
+    return (i, j)
+
+def meta_objective_function(params1, params2, include_self=True, ignore_out_of_bounds=True):
+    params1 = np.asarray(params1, dtype=float)
+    params2 = np.asarray(params2, dtype=float)
+    n_cells = (len(params1) - 1) * (len(params2) - 1)
+    if n_cells == 0:
+        return 0.0
+
+    total_successors = 0
+
+    for i in range(len(params1) - 1):
+        for j in range(len(params2) - 1):
+            corners = np.array([
+                [params1[i],   params2[j]],
+                [params1[i+1], params2[j]],
+                [params1[i],   params2[j+1]],
+                [params1[i+1], params2[j+1]],
+            ])
+            transformed = np.array([mc_cl_dynamics(c) for c in corners])  # (4,2)
+
+            successor_cells = set()
+            if include_self:
+                successor_cells.add((i, j))
+
+            for (tx, ty) in transformed:
+                cell = _point_to_cell(tx, ty, params1, params2)
+                if cell is None:
+                    if ignore_out_of_bounds:
+                        continue
+                    else:
+                        continue  # placeholder for potential future handling
+                successor_cells.add(cell)
+
+            total_successors += len(successor_cells)
+
+    return total_successors / n_cells
+
+# Differentiable replacement of the desired objective
 def objective_function(params1, params2):
     cost = 0.0
     for i in range(len(params1) - 1):
@@ -28,15 +133,14 @@ def objective_function(params1, params2):
                 [params1[i],   params2[j+1]],
                 [params1[i+1], params2[j+1]],
             ])
-            transformed = np.array([dynamics(c) for c in corners])   # shape (4, 2)
+            transformed = np.array([mc_cl_dynamics(c) for c in corners])   # shape (4, 2)
             avg = transformed.mean(axis=0)                           # shape (2,)
             sq_dists = np.sum((transformed - avg)**2, axis=1)        # shape (4,)
             cost += 0.5 * sq_dists.sum()
     return cost
 
-
-# Define gradient of the objective function
-def gradient_objective_function(params1, params2, alpha=0.1):
+# Gradient of surrogate objective using finite-difference Jacobian
+def gradient_objective_function(params1, params2):
     params1 = np.asarray(params1, dtype=float)
     params2 = np.asarray(params2, dtype=float)
 
@@ -56,7 +160,7 @@ def gradient_objective_function(params1, params2, alpha=0.1):
             vs = [v1, v2, v3, v4]
 
             # --- 2. Forward dynamics: y_l = f(v_l) ---
-            ys = [dynamics(v, alpha=alpha) for v in vs]   # 4 x (2,)
+            ys = [mc_cl_dynamics(v) for v in vs]          # 4 x (2,)
             ys_arr = np.stack(ys, axis=0)                 # shape (4, 2)
 
             # --- 3. Mean of transformed corners ---
@@ -68,8 +172,8 @@ def gradient_objective_function(params1, params2, alpha=0.1):
             # --- 5. dJ/dv_l = J_f(v_l)^T * g_l ---
             u = []
             for l in range(4):
-                Jf = jacobian_dynamics(vs[l], alpha=alpha)  # 2x2
-                u_l = Jf.T @ g[l]                           # shape (2,)
+                Jf = approx_jacobian_mc_cl(vs[l])         # 2x2
+                u_l = Jf.T @ g[l]                         # shape (2,)
                 u.append(u_l)
             u = np.stack(u, axis=0)  # shape (4, 2)
 
@@ -98,9 +202,8 @@ def gradient_objective_function(params1, params2, alpha=0.1):
 
     return grad_cost_1, grad_cost_2
 
-
 # Gradient descent optimization
-def gradient_descent(params1, params2, learning_rate=0.1, max_iters=5000, tol=1e-3, verbose=True):
+def gradient_descent(params1, params2, learning_rate=0.1, max_iters=1000, tol=1e-3, verbose=True):
     # Make a copy so we don't overwrite the original list
     params1 = params1[:]
     params2 = params2[:]
@@ -110,6 +213,7 @@ def gradient_descent(params1, params2, learning_rate=0.1, max_iters=5000, tol=1e
 
     for it in range(max_iters):
         cost = objective_function(params1, params2)
+        meta_cost = meta_objective_function(params1, params2)
         
         # Check for NaN - early termination if unstable
         if np.isnan(cost):
@@ -119,8 +223,8 @@ def gradient_descent(params1, params2, learning_rate=0.1, max_iters=5000, tol=1e
             
         history.append(cost)
 
-        if verbose and it % 100 == 0:
-            print(f"Iter {it:5d} | cost = {cost:.6e}")
+        if verbose and it % 1 == 0:
+            print(f"Iter {it:5d} | cost = {cost:.6e} | meta cost = {meta_cost:.3e}")
 
         # Stopping criterion: cost not changing much
         grad1, grad2 = gradient_objective_function(params1, params2)
@@ -144,27 +248,33 @@ def gradient_descent(params1, params2, learning_rate=0.1, max_iters=5000, tol=1e
     return params1, params2, history, params1_history, params2_history
 
 
-x1min, x1max = -10, 10
-x2min, x2max = -10, 10
-params1 = np.linspace(x1min, x1max, 52).tolist()
-params2 = np.linspace(x2min, x2max, 52).tolist()
+# Initialize the abstraction grid
+x1min, x1max = -1.2, 0.6
+x2min, x2max = -0.07, 0.07
+params1 = np.linspace(x1min, x1max, 22).tolist()
+params2 = np.linspace(x2min, x2max, 22).tolist()
 
+# Initial metrics
 cost = objective_function(params1, params2)
+meta_cost = meta_objective_function(params1, params2)
 print("Initial cost:", cost)
-grad_cost1, grad_cost2 = gradient_objective_function(params1, params2)
-print("Initial gradient (params1):", grad_cost1)
-print("Initial gradient (params2):", grad_cost2)
+print("Initial meta cost:", meta_cost)
 
 # Run gradient descent
-lr = 0.0000015
-final_params1, final_params2, history, params1_history, params2_history = gradient_descent(params1, params2, learning_rate=lr, max_iters=50000)
+lr = 0.01
+final_params1, final_params2, history, params1_history, params2_history = gradient_descent(params1, params2, learning_rate=lr, max_iters=606)
+meta_cost_final = meta_objective_function(final_params1, final_params2)
 print("\nFinal params1:", final_params1)
 print("Final params2:", final_params2)
 print("Final cost:", objective_function(final_params1, final_params2))
+print("Final meta cost:", meta_cost_final)
 
 
 
-
+# Compute meta cost history corresponding to each stored params history
+meta_history = [meta_objective_function(p1, p2) for p1, p2 in zip(params1_history, params2_history)]
+print("Initial meta cost:", meta_history[0])
+print("Final   meta cost:", meta_history[-1])
 
 # Create animated GIF
 
@@ -175,6 +285,11 @@ if sampled_indices[-1] != len(params1_history) - 1:
     sampled_indices.append(len(params1_history) - 1)  # Always include final frame
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+ax2b = ax2.twinx()  # twin axis for meta cost
+
+# Precompute y-lims for consistent scaling across frames
+cost_max = max(history) if len(history) > 0 else 1.0
+meta_max = max(meta_history) if len(meta_history) > 0 else 1.0
 
 def animate(frame_idx):
     idx = sampled_indices[frame_idx]
@@ -184,6 +299,7 @@ def animate(frame_idx):
     # Clear axes
     ax1.clear()
     ax2.clear()
+    ax2b.clear()
     
     # Left plot: 2D grid with moving grid lines
     # Draw vertical lines (params1)
@@ -198,23 +314,35 @@ def animate(frame_idx):
         linewidth = 3 if j == 0 or j == len(p2) - 1 else 1.5
         ax1.axhline(y, color=color, linewidth=linewidth, alpha=0.7)
     
-    ax1.set_xlim(x1min - 0.5, x1max + 0.5)
-    ax1.set_ylim(x2min - 0.5, x2max + 0.5)
+    ax1.set_xlim(x1min - 0.1, x1max + 0.1)
+    ax1.set_ylim(x2min - 0.01, x2max + 0.01)
     ax1.set_xlabel('position (p)', fontsize=12)
     ax1.set_ylabel('velocity (v)', fontsize=12)
-    ax1.set_title(f'2D Grid Evolution | Iteration {idx} | Cost: {history[idx]:.6f}', 
+    ax1.set_title(f'2D Grid Evolution | Iteration {idx} | Cost: {history[idx]:.6f} | Meta: {meta_history[idx]:.6f}', 
                   fontsize=13, fontweight='bold')
     ax1.set_aspect('equal')
     ax1.grid(True, alpha=0.2, linestyle='--')
     
-    # Right plot: Cost history
-    ax2.plot(history[:idx+1], 'b-', linewidth=2)
-    ax2.scatter([idx], [history[idx]], c='red', s=100, zorder=3)
+    # Right plot: Cost and Meta cost history
+    ax2.plot(history[:idx+1], 'b-', linewidth=2, label='cost')
+    ax2.scatter([idx], [history[idx]], c='blue', s=60, zorder=3)
     ax2.set_xlabel('Iteration', fontsize=12)
-    ax2.set_ylabel('Cost', fontsize=12)
+    ax2.tick_params(axis='y', labelcolor='blue')
     ax2.grid(True, alpha=0.3)
     ax2.set_xlim(0, len(history))
-    ax2.set_ylim(0, max(history) * 1.1)
+    ax2.set_ylim(1.5, cost_max * 1.1)
+
+    ax2b.plot(meta_history[:idx+1], 'orange', linewidth=2, label='meta cost')
+    ax2b.scatter([idx], [meta_history[idx]], c='orange', s=60, zorder=3)
+    ax2b.tick_params(axis='y', labelcolor='orange')
+    ax2b.set_ylim(3, meta_max * 1.1)
+
+    # Optional combined legend
+    # Create a single legend by combining handles
+    handles1, labels1 = ax2.get_legend_handles_labels()
+    handles2, labels2 = ax2b.get_legend_handles_labels()
+    if handles1 or handles2:
+        ax2.legend(handles1 + handles2, labels1 + labels2, loc='upper right')
 
 # Create animation
 anim = FuncAnimation(fig, animate, frames=len(sampled_indices), interval=50, repeat=True)
@@ -225,5 +353,3 @@ writer = PillowWriter(fps=20)
 anim.save('dynamics-optimize.gif', writer=writer)
 
 plt.close()
-
-
