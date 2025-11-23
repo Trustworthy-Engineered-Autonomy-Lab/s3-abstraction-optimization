@@ -1,15 +1,80 @@
 # Libraries
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
+import torch.nn as nn
 from matplotlib.animation import FuncAnimation, PillowWriter
 from scipy.stats import norm
+from pathlib import Path
 
-# Define the dynamics
-def dynamics(x, x_star=np.array([5.0, 5.0])):
-    A = np.array([[0.8, -0.3],
-                  [0.3,  0.8]])  # contraction + mild rotation
+# MountainCar open-loop dynamics
+def mc_ol_dynamics(state, action):
+    p, v = state
+    v_next = v + 0.001*(action - 1) - 0.0025*np.cos(3*p)
+    v_next = np.clip(v_next, -0.07, 0.07)
+    p_next = p + v_next
+    p_next = np.clip(p_next, -1.2, 0.6)
+    if p_next <= -1.2 and v_next < 0:
+        v_next = 0.0
+    return np.array([p_next, v_next])
+
+# DQN policy
+class DQN(nn.Module):
+
+    # Initialize the neural network
+    def __init__(self, state_dim, action_dim, hidden_dim):
+        super(DQN, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim), # Input layer
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), # Hidden layer
+            nn.ReLU(),
+            nn.Linear(hidden_dim, action_dim) # Output layer
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+# Lazy-load cached policy (avoid re-instantiation)
+_DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+_POLICY_CACHE = None
+_POLICY_PATH = Path(__file__).resolve().parent / 'policy.pth'
+
+def get_policy():
+    global _POLICY_CACHE
+    if _POLICY_CACHE is None:
+        net = DQN(2, 3, 128).to(_DEVICE)
+        state_dict = torch.load(str(_POLICY_PATH), map_location=_DEVICE)
+        net.load_state_dict(state_dict)
+        net.eval()
+        _POLICY_CACHE = net
+    return _POLICY_CACHE
+
+def policy_action(state):
+    net = get_policy()
+    with torch.no_grad():
+        s = torch.as_tensor(state, dtype=torch.float32, device=_DEVICE).unsqueeze(0)
+        q = net(s)
+        return int(q.argmax(dim=1).item())
+
+# Closed-loop dynamics using greedy policy (no need to pass network each call)
+def mc_cl_dynamics(x):
+    x_np = np.asarray(x, dtype=np.float64)
+    a_idx = policy_action(x_np)
+    return mc_ol_dynamics(x_np, a_idx)
+
+# Approximate Jacobian of closed-loop dynamics (holds action fixed)
+def approx_jacobian_mc_cl(x, eps=1e-5):
     x = np.asarray(x, dtype=float)
-    return x_star + A @ (x - x_star)
+    a = policy_action(x)  # action chosen at base state
+    base = mc_ol_dynamics(x, a)
+    J = np.zeros((2, 2))
+    for k in range(2):
+        x_pert = x.copy()
+        x_pert[k] += eps
+        pert = mc_ol_dynamics(x_pert, a)  # keep same action to avoid discontinuities
+        J[:, k] = (pert - base) / eps
+    return J
 
 # Compute Markovian transition probabilities
 def compute_probabilities(params1, params2, sigma1=1.0, sigma2=1.0):
@@ -25,7 +90,7 @@ def compute_probabilities(params1, params2, sigma1=1.0, sigma2=1.0):
             b_lo = params2[j]
             b_hi = params2[j+1]
             mid_x = [0.5 * (a_lo + a_hi), 0.5 * (b_lo + b_hi)]
-            mu = dynamics(np.array(mid_x))
+            mu = mc_cl_dynamics(np.array(mid_x))
 
             # Inner loop loops over target cells (k,l)
             for m in range(M):
@@ -92,7 +157,7 @@ def failure_reach_probability(P, s0, failure_index=None):
     return float(x[s0])
 
 def objective_function(params1, params2):
-    probabilities = compute_probabilities(params1, params2, sigma1=0.5, sigma2=0.5)
+    probabilities = compute_probabilities(params1, params2, sigma1=1.0, sigma2=1.0)
 
     # Convert 4D array to 2D transition matrix
     M = len(params1) - 1
@@ -134,11 +199,9 @@ def gradient_objective_function(params1, params2):
     from scipy.stats import norm
 
     # --- Settings (keep consistent with your abstraction) ---
-    sigma1 = 0.5
-    sigma2 = 0.5
+    sigma1 = 1.0
+    sigma2 = 1.0
     horizon = 100  # time horizon N
-    A_dyn = np.array([[0.8, -0.3],
-                      [0.3,  0.8]])  # must match `dynamics`
 
     params1 = np.asarray(params1, dtype=float)
     params2 = np.asarray(params2, dtype=float)
@@ -212,8 +275,10 @@ def gradient_objective_function(params1, params2):
             mid2 = 0.5 * (b_lo + b_hi)
 
             mid_x = np.array([mid1, mid2])
-            mu = dynamics(mid_x)
+            mu = mc_cl_dynamics(mid_x)
             mu1, mu2 = mu
+
+            A_dyn = approx_jacobian_mc_cl(mid_x)
 
             for m_idx in range(M):
                 a_m = params1[m_idx]
@@ -349,121 +414,15 @@ def gradient_descent(params1, params2, learning_rate=0.1, max_iters=5000, tol=1e
 
     return params1, params2, history, params1_history, params2_history
 
-x1min, x1max = -10, 10
-x2min, x2max = -10, 10
-# params1 = np.linspace(x1min, x1max, 1).tolist()
-# params2 = np.linspace(x2min, x2max, 51).tolist()
-# Generate random interior points and include endpoints
+
+# Initialize the abstraction grid
+x1min, x1max = -1.2, 0.6
+x2min, x2max = -0.07, 0.07
 num_interior_points = 8
 interior1 = np.random.uniform(x1min, x1max, num_interior_points)
 interior2 = np.random.uniform(x2min, x2max, num_interior_points)
 params1 = sorted([x1min] + interior1.tolist() + [x1max])
 params2 = sorted([x2min] + interior2.tolist() + [x2max])
 
-cost = objective_function(params1, params2)
-print("Initial cost:", cost)
-grad_cost1, grad_cost2 = gradient_objective_function(params1, params2)
-print("Initial gradient (params1):", grad_cost1)
-print("Initial gradient (params2):", grad_cost2)
-
-lr = 1.0
-final_params1, final_params2, history, params1_history, params2_history = gradient_descent(params1, params2, learning_rate=lr, max_iters=100, cushion=[0.5, 0.5])
-print("\nFinal params1:", final_params1)
-print("Final params2:", final_params2)
-print("Final cost:", objective_function(final_params1, final_params2))
-
-# Create animated GIF
-
-# Sample frames - with only 50 iterations, show more frames
-sample_rate = max(1, len(params1_history) // 100)  # Show every frame or every few
-sampled_indices = list(range(0, len(params1_history), sample_rate))
-if len(sampled_indices) == 0 or sampled_indices[-1] != len(params1_history) - 1:
-    sampled_indices.append(len(params1_history) - 1)  # Always include final frame
-
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-
-# Precompute y-lims for consistent scaling across frames
-cost_max = max(history) if len(history) > 0 else 1.0
-
-def animate(frame_idx):
-    idx = sampled_indices[frame_idx]
-    p1 = params1_history[idx]
-    p2 = params2_history[idx]
-    
-    # Clear axes
-    ax1.clear()
-    ax2.clear()
-    
-    # Compute failure probabilities for current grid configuration
-    probs_current = compute_probabilities(p1, p2, sigma1=0.5, sigma2=0.5)
-    M_curr = len(p1) - 1
-    N_curr = len(p2) - 1
-    num_states_curr = M_curr * N_curr
-    T_part_curr = probs_current.reshape(num_states_curr, num_states_curr)
-    
-    # Add failure state
-    row_sums_curr = T_part_curr.sum(axis=1)
-    missing_mass_curr = 1.0 - row_sums_curr
-    T_curr = np.zeros((num_states_curr + 1, num_states_curr + 1))
-    T_curr[:num_states_curr, :num_states_curr] = T_part_curr
-    T_curr[:num_states_curr, -1] = missing_mass_curr
-    T_curr[-1, -1] = 1.0
-    
-    # Compute failure probabilities for each cell
-    failure_probs = np.zeros(num_states_curr)
-    for s in range(num_states_curr):
-        failure_probs[s] = fail_within_N_steps(T_curr, s, failure_index=num_states_curr, N=100)
-    
-    # Reshape to grid
-    failure_grid = failure_probs.reshape(M_curr, N_curr)
-    
-    # Left plot: Color-coded cells by failure probability
-    for i in range(M_curr):
-        for j in range(N_curr):
-            x_left, x_right = p1[i], p1[i + 1]
-            y_bottom, y_top = p2[j], p2[j + 1]
-            fail_prob = failure_grid[i, j]
-            
-            # Color by failure probability (hot_r reversed: white/yellow=low risk, red/dark=high risk)
-            rect = plt.Rectangle((x_left, y_bottom), x_right - x_left, y_top - y_bottom,
-                                facecolor=plt.cm.hot_r(fail_prob), 
-                                edgecolor='black', linewidth=0.5, alpha=0.7)
-            ax1.add_patch(rect)
-    
-    # Draw grid lines
-    for i, x in enumerate(p1):
-        color = 'black' if i == 0 or i == len(p1) - 1 else 'gray'
-        linewidth = 2 if i == 0 or i == len(p1) - 1 else 0.8
-        ax1.axvline(x, color=color, linewidth=linewidth, alpha=0.8)
-    
-    for j, y in enumerate(p2):
-        color = 'black' if j == 0 or j == len(p2) - 1 else 'gray'
-        linewidth = 2 if j == 0 or j == len(p2) - 1 else 0.8
-        ax1.axhline(y, color=color, linewidth=linewidth, alpha=0.8)
-    
-    ax1.set_xlim(x1min - 0.5, x1max + 0.5)
-    ax1.set_ylim(x2min - 0.5, x2max + 0.5)
-    ax1.set_xlabel('x1', fontsize=12)
-    ax1.set_ylabel('x2', fontsize=12)
-    ax1.set_title(f'Failure Risk (100 steps) | Iter {idx} | Cost: {history[idx]:.6f}', 
-                  fontsize=13, fontweight='bold')
-    ax1.set_aspect('equal')
-    
-    # Right plot: Cost history
-    ax2.plot(history[:idx+1], 'b-', linewidth=2, label='cost')
-    ax2.scatter([idx], [history[idx]], c='blue', s=60, zorder=3)
-    ax2.set_xlabel('Iteration', fontsize=12)
-    ax2.set_ylabel('Uniform Failure Probability', fontsize=12)
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xlim(0, len(history))
-    ax2.set_ylim(0, cost_max * 1.1)
-
-# Create animation
-anim = FuncAnimation(fig, animate, frames=len(sampled_indices), interval=50, repeat=True)
-
-# Save as GIF
-print(f"Saving GIF with {len(sampled_indices)} frames...")
-writer = PillowWriter(fps=20)
-anim.save('dynamics-optimize.gif', writer=writer)
-
-plt.close()
+cost = objective_function(params1, params2) # 1.00 - hitting the wall is considered a failure
+print(f"Initial cost: {cost:.6e}")
