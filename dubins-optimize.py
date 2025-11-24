@@ -5,11 +5,9 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 from scipy.stats import norm
 
 # Define the dynamics
-def dynamics(x, x_star=np.array([5.0, 5.0])):
-    A = np.array([[0.8, -0.3],
-                  [0.3,  0.8]])  # contraction + mild rotation
-    x = np.asarray(x, dtype=float)
-    return x_star + A @ (x - x_star)
+def dubins_discrete(state, v, umax, seg, s, dt=0.1):
+    x, y, theta = state
+    
 
 # Compute Markovian transition probabilities
 def compute_probabilities(params1, params2, sigma1=1.0, sigma2=1.0):
@@ -360,110 +358,4 @@ interior2 = np.random.uniform(x2min, x2max, num_interior_points)
 params1 = sorted([x1min] + interior1.tolist() + [x1max])
 params2 = sorted([x2min] + interior2.tolist() + [x2max])
 
-cost = objective_function(params1, params2)
-print("Initial cost:", cost)
-grad_cost1, grad_cost2 = gradient_objective_function(params1, params2)
-print("Initial gradient (params1):", grad_cost1)
-print("Initial gradient (params2):", grad_cost2)
 
-lr = 0.8
-final_params1, final_params2, history, params1_history, params2_history = gradient_descent(params1, params2, learning_rate=lr, max_iters=1000, cushion=[0.5, 0.5])
-print("\nFinal params1:", final_params1)
-print("Final params2:", final_params2)
-print("Final cost:", objective_function(final_params1, final_params2))
-
-# Create animated GIF
-
-# Sample frames - with only 50 iterations, show more frames
-sample_rate = max(1, len(params1_history) // 100)  # Show every frame or every few
-sampled_indices = list(range(0, len(params1_history), sample_rate))
-if len(sampled_indices) == 0 or sampled_indices[-1] != len(params1_history) - 1:
-    sampled_indices.append(len(params1_history) - 1)  # Always include final frame
-
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-
-# Precompute y-lims for consistent scaling across frames
-cost_max = max(history) if len(history) > 0 else 1.0
-
-def animate(frame_idx):
-    idx = sampled_indices[frame_idx]
-    p1 = params1_history[idx]
-    p2 = params2_history[idx]
-    
-    # Clear axes
-    ax1.clear()
-    ax2.clear()
-    
-    # Compute failure probabilities for current grid configuration
-    probs_current = compute_probabilities(p1, p2, sigma1=0.5, sigma2=0.5)
-    M_curr = len(p1) - 1
-    N_curr = len(p2) - 1
-    num_states_curr = M_curr * N_curr
-    T_part_curr = probs_current.reshape(num_states_curr, num_states_curr)
-    
-    # Add failure state
-    row_sums_curr = T_part_curr.sum(axis=1)
-    missing_mass_curr = 1.0 - row_sums_curr
-    T_curr = np.zeros((num_states_curr + 1, num_states_curr + 1))
-    T_curr[:num_states_curr, :num_states_curr] = T_part_curr
-    T_curr[:num_states_curr, -1] = missing_mass_curr
-    T_curr[-1, -1] = 1.0
-    
-    # Compute failure probabilities for each cell
-    failure_probs = np.zeros(num_states_curr)
-    for s in range(num_states_curr):
-        failure_probs[s] = fail_within_N_steps(T_curr, s, failure_index=num_states_curr, N=100)
-    
-    # Reshape to grid
-    failure_grid = failure_probs.reshape(M_curr, N_curr)
-    
-    # Left plot: Color-coded cells by failure probability
-    for i in range(M_curr):
-        for j in range(N_curr):
-            x_left, x_right = p1[i], p1[i + 1]
-            y_bottom, y_top = p2[j], p2[j + 1]
-            fail_prob = failure_grid[i, j]
-            
-            # Color by failure probability (hot_r reversed: white/yellow=low risk, red/dark=high risk)
-            rect = plt.Rectangle((x_left, y_bottom), x_right - x_left, y_top - y_bottom,
-                                facecolor=plt.cm.hot_r(fail_prob), 
-                                edgecolor='black', linewidth=0.5, alpha=0.7)
-            ax1.add_patch(rect)
-    
-    # Draw grid lines
-    for i, x in enumerate(p1):
-        color = 'black' if i == 0 or i == len(p1) - 1 else 'gray'
-        linewidth = 2 if i == 0 or i == len(p1) - 1 else 0.8
-        ax1.axvline(x, color=color, linewidth=linewidth, alpha=0.8)
-    
-    for j, y in enumerate(p2):
-        color = 'black' if j == 0 or j == len(p2) - 1 else 'gray'
-        linewidth = 2 if j == 0 or j == len(p2) - 1 else 0.8
-        ax1.axhline(y, color=color, linewidth=linewidth, alpha=0.8)
-    
-    ax1.set_xlim(x1min - 0.5, x1max + 0.5)
-    ax1.set_ylim(x2min - 0.5, x2max + 0.5)
-    ax1.set_xlabel('x1', fontsize=12)
-    ax1.set_ylabel('x2', fontsize=12)
-    ax1.set_title(f'Failure Risk (100 steps) | Iter {idx} | Cost: {history[idx]:.6f}', 
-                  fontsize=13, fontweight='bold')
-    ax1.set_aspect('equal')
-    
-    # Right plot: Cost history
-    ax2.plot(history[:idx+1], 'b-', linewidth=2, label='cost')
-    ax2.scatter([idx], [history[idx]], c='blue', s=60, zorder=3)
-    ax2.set_xlabel('Iteration', fontsize=12)
-    ax2.set_ylabel('Uniform Failure Probability', fontsize=12)
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xlim(0, len(history))
-    ax2.set_ylim(0, cost_max * 1.1)
-
-# Create animation
-anim = FuncAnimation(fig, animate, frames=len(sampled_indices), interval=50, repeat=True)
-
-# Save as GIF
-print(f"Saving GIF with {len(sampled_indices)} frames...")
-writer = PillowWriter(fps=20)
-anim.save('dynamics-optimize.gif', writer=writer)
-
-plt.close()
