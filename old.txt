@@ -85,7 +85,6 @@ def _point_to_cell(x, y, params1, params2):
     if i < 0 or i >= len(params1) - 1 or j < 0 or j >= len(params2) - 1:
         return None
     return (i, j)
-
 def meta_objective_function(params1, params2, include_self=True, ignore_out_of_bounds=True):
     params1 = np.asarray(params1, dtype=float)
     params2 = np.asarray(params2, dtype=float)
@@ -261,8 +260,8 @@ print("Initial cost:", cost)
 print("Initial meta cost:", meta_cost)
 
 # Run gradient descent
-lr = 0.01
-final_params1, final_params2, history, params1_history, params2_history = gradient_descent(params1, params2, learning_rate=lr, max_iters=606)
+lr = 0.02
+final_params1, final_params2, history, params1_history, params2_history = gradient_descent(params1, params2, learning_rate=lr, max_iters=1000)
 meta_cost_final = meta_objective_function(final_params1, final_params2)
 print("\nFinal params1:", final_params1)
 print("Final params2:", final_params2)
@@ -275,6 +274,9 @@ print("Final meta cost:", meta_cost_final)
 meta_history = [meta_objective_function(p1, p2) for p1, p2 in zip(params1_history, params2_history)]
 print("Initial meta cost:", meta_history[0])
 print("Final   meta cost:", meta_history[-1])
+
+
+'''
 
 # Create animated GIF
 
@@ -353,3 +355,4 @@ writer = PillowWriter(fps=20)
 anim.save('dynamics-optimize.gif', writer=writer)
 
 plt.close()
+'''
