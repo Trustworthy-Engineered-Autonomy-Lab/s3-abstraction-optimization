@@ -15,7 +15,7 @@ if __name__ == "__main__":
     radius = 5.0
 
     # Define abstraction mapping parameters
-    theta = -np.pi / 2
+    theta = -np.pi / 3
     s1, s2 = 1.0, 1.0
     h = 0.0
     R = np.array([[np.cos(theta), -np.sin(theta)],
@@ -24,7 +24,7 @@ if __name__ == "__main__":
                   [0, s2]])
     H = np.array([[1, h],
                   [0, 1]])
-    M = H @ S @ R 
+    M = H @ S @ R
 
     # Compute y-domain bounds from x-domain and transformation
     bounds_y, verts_y = gpt.get_yspace_bounds(M, x1_min, x1_max, x2_min, x2_max)
@@ -32,8 +32,8 @@ if __name__ == "__main__":
     y2_lo, y2_hi = bounds_y["y2"][0], bounds_y["y2"][1]
 
     # Uniform grid in y-space
-    n1_internal = 49
-    n2_internal = 49
+    n1_internal = 200
+    n2_internal = 200
     y1_params_ends = np.linspace(y1_lo, y1_hi, n1_internal + 2) # include boundaries
     y2_params_ends = np.linspace(y2_lo, y2_hi, n2_internal + 2) #
 
