@@ -2,6 +2,7 @@
 import numpy as np
 import grid_plot_tools as gpt
 from spread_objective_tools import trans_matrix, diff_objective_reg, extract_grid_params
+from model_checking_tools import make_kripke_from_params, model_check_kripke, check_ground_truth, false_negative_rate
 import jax
 import jax.numpy as jnp
 
@@ -26,7 +27,10 @@ def adam_optimize(params, obj_fn, obj_kwargs, steps=2000, lr=1e-2,
         mhat = m / (1 - b1 ** t)
         vhat = v / (1 - b2 ** t)
 
-        params = params - lr * mhat / (jnp.sqrt(vhat) + eps)
+        # params = params - lr * mhat / (jnp.sqrt(vhat) + eps)
+        # Update only the last 4 parameters
+        update = lr * mhat[-4:] / (jnp.sqrt(vhat[-4:]) + eps)
+        params = params.at[-4:].add(-update)
 
         if (t % print_every) == 0 or t == 1:
             print(f"step {t:5d} | obj {float(val):.6f} | ||g|| {float(gnorm):.6f}")
@@ -43,10 +47,13 @@ if __name__ == "__main__":
     # Define the X-domain
     x1_min, x1_max = -10.0, 10.0
     x2_min, x2_max = -10.0, 10.0
+    x_domain = (x1_min, x1_max, x2_min, x2_max)
+    x_star = np.array([5.0, 5.0])
+    radius = 2.0
 
     # Initial tessellation parameters
-    n1_internal = 18
-    n2_internal = 18
+    n1_internal = 100
+    n2_internal = 100
     key = jax.random.PRNGKey(0)
     u1 = jnp.zeros((n1_internal,))
     u2 = jnp.zeros((n2_internal,))
@@ -63,7 +70,8 @@ if __name__ == "__main__":
     )
     y1_lo, y1_hi = bounds_y["y1"][0], bounds_y["y1"][1]
     y2_lo, y2_hi = bounds_y["y2"][0], bounds_y["y2"][1]
-    
+
+
     # Pack initial params; check initial objective + grad
     params = jnp.concatenate([u1, u2, jnp.array([theta, a1, a2, h])])
     val, grad = jax.value_and_grad(diff_objective_reg)(
@@ -73,6 +81,36 @@ if __name__ == "__main__":
         n1_internal=n1_internal, n2_internal=n2_internal,
         tau=0.05, min_gap=0.0
     )
+
+
+
+    # Run model checking and compute FNR with these initial tessellation parameters
+    M, y1_params, y2_params = extract_grid_params(
+    params,
+    n1_internal=n1_internal, n2_internal=n2_internal,
+    x1_min=x1_min, x1_max=x1_max, x2_min=x2_min, x2_max=x2_max,
+    min_gap=0.0)
+    y1_params_ends = np.concatenate(([y1_lo], np.array(y1_params), [y1_hi]))
+    y2_params_ends = np.concatenate(([y2_lo], np.array(y2_params), [y2_hi]))
+    ground_truth_check = check_ground_truth(x_domain, x_star, radius,
+                                            y1_params_ends, y2_params_ends, M)
+    kripke_structure = make_kripke_from_params(x_domain, x_star, radius,
+                                               y1_params_ends, y2_params_ends, M)
+    sat_init_states = model_check_kripke(kripke_structure)
+    checked_safe_states = set(sat_init_states)
+    true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
+    fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
+    print(f"False Negative Rate (FNR): {fnr:.4f}")
+
+
+
+
+
+    # Compute false negative rate
+    checked_safe_states = set(sat_init_states)
+    true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
+    fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
+    print(f"False Negative Rate (FNR): {fnr:.4f}")
     
     # Optimization
     obj_kwargs = dict(
@@ -87,17 +125,37 @@ if __name__ == "__main__":
     lam_det=10.0,
     lam_cond=1e-3,
     lam_shear=1e-2)
-    params_opt = adam_optimize(params, diff_objective_reg, obj_kwargs, steps=1000, lr=1e-2, clip=50.0)
+    params_opt = adam_optimize(params, diff_objective_reg, obj_kwargs, steps=2000, lr=1e-2, clip=50.0)
 
-    # Plot the grids
-    M_np, y1_vals, y2_vals = extract_grid_params(
+    # Run model checking and compute FNR with these new tessellation parameters
+    M, y1_params, y2_params = extract_grid_params(
     params_opt,
     n1_internal=n1_internal, n2_internal=n2_internal,
     x1_min=x1_min, x1_max=x1_max, x2_min=x2_min, x2_max=x2_max,
     min_gap=0.0)
-    gpt.grid_plotter(M_np, y1_vals, y2_vals, x1_min, x1_max, x2_min, x2_max)
+    y1_params_ends = np.concatenate(([y1_lo], np.array(y1_params), [y1_hi]))
+    y2_params_ends = np.concatenate(([y2_lo], np.array(y2_params), [y2_hi]))
+    ground_truth_check = check_ground_truth(x_domain, x_star, radius,
+                                            y1_params_ends, y2_params_ends, M)
+    kripke_structure = make_kripke_from_params(x_domain, x_star, radius,
+                                               y1_params_ends, y2_params_ends, M)
+    sat_init_states = model_check_kripke(kripke_structure)
+    checked_safe_states = set(sat_init_states)
+    true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
+    fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
+    print(f"False Negative Rate (FNR): {fnr:.4f}")
+    # gpt.grid_plotter(M, y1_params, y2_params, x1_min, x1_max, x2_min, x2_max)
 
-
+    # gpt.plot_x_grid_false_negative_map(
+    #     M,
+    #     y1_params_ends,
+    #     y2_params_ends,
+    #     sat=sat_init_states,
+    #     false_negative_states=false_negative_states,
+    #     x_domain=x_domain,
+    #     x_star=x_star,
+    #     radius=radius,
+    # )
 
 
     # print("Objective:", float(val))

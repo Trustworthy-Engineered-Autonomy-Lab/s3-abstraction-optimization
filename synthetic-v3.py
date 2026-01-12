@@ -1,14 +1,7 @@
 # Libraries
 import numpy as np
 import grid_plot_tools as gpt
-from model_checking_tools import make_kripke_from_params, model_check_kripke, check_ground_truth
-
-
-def false_negative_rate(true_safe_states, checked_safe_states):
-    false_negative_states = {s for s in true_safe_states if s not in checked_safe_states}
-    denom = len(true_safe_states)
-    fnr = (len(false_negative_states) / denom) if denom > 0 else float('nan')
-    return fnr, false_negative_states
+from model_checking_tools import make_kripke_from_params, model_check_kripke, check_ground_truth, false_negative_rate
 
 if __name__ == "__main__":
 
@@ -19,10 +12,10 @@ if __name__ == "__main__":
     x1_min, x1_max = -10.0, 10.0
     x2_min, x2_max = -10.0, 10.0
     x_domain = (x1_min, x1_max, x2_min, x2_max)
-    radius = 5.0
+    radius = 2.0
 
     # Define abstraction mapping parameters
-    theta = -np.pi / 3
+    theta = -np.pi / 4
     s1, s2 = 1.0, 1.0
     h = 0.0
     R = np.array([[np.cos(theta), -np.sin(theta)],

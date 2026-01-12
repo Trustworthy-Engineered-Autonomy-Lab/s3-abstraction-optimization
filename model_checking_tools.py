@@ -28,10 +28,13 @@ def intersecting_cells_from_y_aabb(y1_params, y2_params, y1_min, y1_max, y2_min,
     if y1_max < grid_y1_min or y1_min > grid_y1_max or y2_max < grid_y2_min or y2_min > grid_y2_max:
         return []
 
+    # Use side="right" for both ends.
+    # This avoids the empty-set edge case when y_min == y_max equals a grid line:
+    #   side="left" would assign the max to the lower cell, potentially giving i_hi < i_lo.
     i_lo = int(np.searchsorted(y1_params, y1_min, side="right") - 1)
-    i_hi = int(np.searchsorted(y1_params, y1_max, side="left") - 1)
+    i_hi = int(np.searchsorted(y1_params, y1_max, side="right") - 1)
     j_lo = int(np.searchsorted(y2_params, y2_min, side="right") - 1)
-    j_hi = int(np.searchsorted(y2_params, y2_max, side="left") - 1)
+    j_hi = int(np.searchsorted(y2_params, y2_max, side="right") - 1)
 
     i_lo = max(0, min(n1 - 1, i_lo))
     i_hi = max(0, min(n1 - 1, i_hi))
@@ -134,6 +137,11 @@ def make_kripke_from_params(x_domain, x_star, radius, y1_params, y2_params, M):
                 kripke_transitions.add((src, dst))
             if hits_oob:
                 kripke_transitions.add((src, oob_state_id))
+
+            # Force self loop if no in-grid successors and no OOB transition
+            if (not succ_cells) and (not hits_oob):
+                kripke_transitions.add((src, src))
+
             kripke_labels[src] = label
             # print(f"{src}: {label[0]} cell ({i},{j}) -> {len(succ_cells)} in-grid successors" + (" + OOB" if hits_oob else ""))
 
@@ -238,3 +246,9 @@ if __name__ == "__main__":
 
     print(K.states())
     print(K.transitions())
+
+def false_negative_rate(true_safe_states, checked_safe_states):
+    false_negative_states = {s for s in true_safe_states if s not in checked_safe_states}
+    denom = len(true_safe_states)
+    fnr = (len(false_negative_states) / denom) if denom > 0 else float('nan')
+    return fnr, false_negative_states
