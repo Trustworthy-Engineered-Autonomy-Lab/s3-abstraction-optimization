@@ -1,8 +1,8 @@
 # Libraries
 import numpy as np
 import grid_plot_tools as gpt
-from spread_objective_tools import trans_matrix, extract_grid_params
-from fnr_objective_tools import soft_adversarial_reach_objective
+from fnr_objective_tools import soft_adversarial_reach_objective, trans_matrix, extract_grid_params
+from model_checking_tools import model_check_tessellation
 import jax
 import jax.numpy as jnp
 
@@ -46,8 +46,8 @@ if __name__ == "__main__":
     x2_min, x2_max = -10.0, 10.0
 
     # Initial tessellation parameters
-    n1_internal = 18
-    n2_internal = 18
+    n1_internal = 8
+    n2_internal = 8
     key = jax.random.PRNGKey(0)
     u1 = jnp.zeros((n1_internal,))
     u2 = jnp.zeros((n2_internal,))
@@ -79,99 +79,66 @@ if __name__ == "__main__":
     obj_kwargs = dict(
     A=jnp.asarray(A),
     center=jnp.asarray(CENTER),
-    y1_lo=y1_lo, y1_hi=y1_hi,
-    y2_lo=y2_lo, y2_hi=y2_hi,
+    x1_min=x1_min, x1_max=x1_max,
+    x2_min=x2_min, x2_max=x2_max,
     n1_internal=n1_internal, n2_internal=n2_internal,
 
-    # choose a goal + init (edit these!)
+    tau_bounds=0.02,
+    min_gap_frac=0.05,   # example
+
     goal_center=jnp.asarray([5.0, 5.0]),
     goal_radius=1.0,
     init_center=jnp.asarray([5.0, 5.0]),
     init_radius=8.0,
 
-    # soft params
     tau_bb=0.03,
     tau_ov=0.02,
     tau_adv=0.15,
     gamma=0.95,
     K=40,
-    min_gap=0.0,
 
-    # regularizers (these are mild; raise if things get wild)
     lam_det=5.0,
     lam_cond=1e-3,
     lam_gap_bounds=5.0,
     gap_ratio_max=5.0)
 
-
     value_and_grad = jax.jit(jax.value_and_grad(lambda p: soft_adversarial_reach_objective(p, **obj_kwargs)))
     val, g = value_and_grad(params)
     print(g)
-    # params_opt = adam_optimize(params, soft_adversarial_reach_objective, obj_kwargs,
-    #                        steps=1500, lr=5e-5, clip=50.0, print_every=50)
+    params_opt = adam_optimize(params, soft_adversarial_reach_objective, obj_kwargs,
+                           steps=5000, lr=1e-5, clip=50.0, print_every=100)
+    
+
+    
+    mc = model_check_tessellation(
+        params_opt,
+        A=np.asarray(A, dtype=float),
+        center=np.asarray(CENTER, dtype=float),
+        x1_min=x1_min, x1_max=x1_max,
+        x2_min=x2_min, x2_max=x2_max,
+        n1_internal=n1_internal, n2_internal=n2_internal,
+        goal_center=(5.0, 5.0),
+        goal_radius=1.0,
+        # optional unsafe:
+        # unsafe_center=(...), unsafe_radius=...,
+        spec_kind="AF_goal",            # or "AG_not_unsafe" or "AU_avoid_unsafe_reach_goal"
+        add_out_state=True,
+        min_gap_frac=0.05,              # should match what you used in training, if any
+    )
+
+    sat = mc.sat
+    print(f"Satisfaction fraction: {sat.mean():.4f}  ({sat.sum()}/{len(sat)})")
+
+    # If you want the failing state indices:
+    bad = np.where(~sat)[0]
+    print("Num failing states:", bad.size)
+    print("First 20 failing states:", bad[:20].tolist())
 
     # # Plot the grids
     # M_np, y1_vals, y2_vals = extract_grid_params(
     # params_opt,
     # n1_internal=n1_internal, n2_internal=n2_internal,
     # x1_min=x1_min, x1_max=x1_max, x2_min=x2_min, x2_max=x2_max,
-    # min_gap=0.0)
+    # min_gap=0.0,
+    # y1_lo=y1_lo, y1_hi=y1_hi, y2_lo=y2_lo, y2_hi=y2_hi)
     # gpt.grid_plotter(M_np, y1_vals, y2_vals, x1_min, x1_max, x2_min, x2_max)
-
-
-
-
-    # print("Objective:", float(val))
-    # print("Grad norm:", float(jnp.linalg.norm(grad)))
-
-    # # Compute cost for this tessellation
-    # J = quick_objective(
-    #     y1_vals, y2_vals,
-    #     theta, s1, s2, h,
-    #     A=A, center=CENTER,
-    #     spread_mode="bbox_area",     # try: "bbox_diag", "mean_pairwise", "trace_cov"
-    #     weight_mode="uniform"        # try: "cell_area_y"
-    # )
-    # print("Objective:", J)
-
-    # # Plot the grids
-    # gpt.grid_plotter(M, y1_vals, y2_vals, x1_min, x1_max, x2_min, x2_max)
-
-
-
-    # # Define the X-domain
-    # x1_min, x1_max = -10.0, 10.0
-    # x2_min, x2_max = -10.0, 10.0
-    # verts_x = np.array([
-    #     [x1_min, x2_min],
-    #     [x1_min, x2_max],
-    #     [x1_max, x2_max],
-    #     [x1_max, x2_min],
-    # ], dtype=float)
-
-    # # Define abstraction mapping parameters
-    # theta = -np.pi / 4  # 45 degree rotation
-    # s1, s2 = 1.0, 1.0  # scaling factors
-    # h = 0.0 # shear factor
-    # R = np.array([[np.cos(theta), -np.sin(theta)],
-    #               [np.sin(theta),  np.cos(theta)]])
-    # S = np.array([[s1, 0],
-    #               [0, s2]])
-    # H = np.array([[1, h],
-    #               [0, 1]])
-    # M = H @ S @ R  # combined transformation matrix
-
-    # # Define the induced Y-domain
-    # bounds_y, verts_y = gpt.get_yspace_bounds(
-    #     M,
-    #     x1_min, x1_max,
-    #     x2_min, x2_max
-    # )
-    # print("Y-space bounds:", bounds_y)
-
-    # # Example grid
-    # n_lines = 10
-    # y1_vals = np.linspace(bounds_y["y1"][0], bounds_y["y1"][1], n_lines)
-    # y2_vals = np.linspace(bounds_y["y2"][0], bounds_y["y2"][1], n_lines)
-    # gpt.grid_plotter(M, y1_vals, y2_vals, x1_min, x1_max, x2_min, x2_max)
-

@@ -1,6 +1,8 @@
 # Libraries
 import jax
 import jax.numpy as jnp
+import numpy as np
+from grid_plot_tools import get_yspace_bounds
 
 def trans_matrix(theta, a1, a2, h):
     """M = H @ S @ R where s1=exp(a1), s2=exp(a2)."""
@@ -78,11 +80,13 @@ def soft_overlap_box_with_cells(src_lo, src_hi, cell_lo, cell_hi, tau_ov=0.02):
 def soft_adversarial_reach_objective(
     params, *,
     A, center,
-    y1_lo, y1_hi, y2_lo, y2_hi,
+    x1_min, x1_max, x2_min, x2_max,
     n1_internal, n2_internal,
     # goal / init definition (x-space balls, easy starter)
     goal_center=jnp.array([5.0, 5.0]), goal_radius=1.0,
     init_center=jnp.array([5.0, 5.0]), init_radius=8.0,
+    tau_bounds=0.02,          # NEW: soft bounds temperature; try 0.0 for hard min/max
+    min_gap_frac=0.0,         # NEW: fraction-based min gap
     # soft params
     tau_bb=0.03,    # for bbox (over corners)
     tau_ov=0.02,    # for overlap geometry
@@ -112,13 +116,20 @@ def soft_adversarial_reach_objective(
     u2 = params[n1_internal:n1_internal+n2_internal]
     theta, a1, a2, h = params[n1_internal+n2_internal:]
 
-    # transform + inverse
     M = trans_matrix(theta, a1, a2, h)
     Minv = jnp.linalg.inv(M)
 
-    # grid lines
-    y1 = make_lines_from_gaps(u1, y1_lo, y1_hi, min_gap=min_gap)  # (n1+1,)
-    y2 = make_lines_from_gaps(u2, y2_lo, y2_hi, min_gap=min_gap)  # (n2+1,)
+    y_lo, y_hi = y_bounds_from_x_box(M, x1_min, x1_max, x2_min, x2_max, tau_bounds=tau_bounds)
+    y1_lo, y2_lo = y_lo[0], y_lo[1]
+    y1_hi, y2_hi = y_hi[0], y_hi[1]
+
+    span1 = y1_hi - y1_lo
+    span2 = y2_hi - y2_lo
+    min_gap1 = min_gap_frac * span1 / n1_internal
+    min_gap2 = min_gap_frac * span2 / n2_internal
+
+    y1 = make_lines_from_gaps(u1, y1_lo, y1_hi, min_gap=min_gap1)
+    y2 = make_lines_from_gaps(u2, y2_lo, y2_hi, min_gap=min_gap2)
 
     y1a, y1b = y1[:-1], y1[1:]   # (n1,)
     y2a, y2b = y2[:-1], y2[1:]   # (n2,)
@@ -206,3 +217,55 @@ def soft_adversarial_reach_objective(
           + jnp.mean(jax.nn.softplus(r2 - gap_ratio_max) + jax.nn.softplus((1.0/gap_ratio_max) - r2))
 
     return J_main + lam_det * R_det + lam_cond * R_cond + lam_gap_bounds * R_gap
+
+
+def extract_grid_params(params, *, n1_internal, n2_internal,
+                        x1_min, x1_max, x2_min, x2_max,
+                        min_gap=0.0,
+                        y1_lo=None, y1_hi=None, y2_lo=None, y2_hi=None):
+    u1 = params[:n1_internal]
+    u2 = params[n1_internal:n1_internal+n2_internal]
+    theta, a1, a2, h = params[n1_internal+n2_internal:]
+
+    M = trans_matrix(theta, a1, a2, h)
+    M_np = np.array(jax.device_get(M))
+
+    # If bounds are not supplied, infer them from current M (old behavior)
+    if y1_lo is None or y1_hi is None or y2_lo is None or y2_hi is None:
+        bounds_y, _ = get_yspace_bounds(M_np, x1_min, x1_max, x2_min, x2_max)
+        y1_lo, y1_hi = bounds_y["y1"]
+        y2_lo, y2_hi = bounds_y["y2"]
+
+    y1_vals = make_lines_from_gaps(u1, y1_lo, y1_hi, min_gap=min_gap)
+    y2_vals = make_lines_from_gaps(u2, y2_lo, y2_hi, min_gap=min_gap)
+
+    return M_np, np.array(jax.device_get(y1_vals)), np.array(jax.device_get(y2_vals))
+
+
+def y_bounds_from_x_box(M, x1_min, x1_max, x2_min, x2_max, tau_bounds=0.0):
+    """
+    Compute an axis-aligned bounding box in y-space that contains Minv * X_box.
+
+    If tau_bounds == 0.0: use hard min/max (piecewise differentiable).
+    If tau_bounds  > 0.0: use softmin/softmax (smoother gradients).
+    """
+    Minv = jnp.linalg.inv(M)
+
+    Xverts = jnp.array([
+        [x1_min, x2_min],
+        [x1_min, x2_max],
+        [x1_max, x2_max],
+        [x1_max, x2_min],
+    ], dtype=jnp.result_type(M))
+
+    Yverts = Xverts @ Minv.T  # (4,2)
+
+    if tau_bounds is None or tau_bounds == 0.0:
+        y_lo = jnp.min(Yverts, axis=0)
+        y_hi = jnp.max(Yverts, axis=0)
+    else:
+        # softmin/softmax over the 4 vertices, per coordinate
+        y_hi = tau_bounds * jax.scipy.special.logsumexp(Yverts / tau_bounds, axis=0)
+        y_lo = -tau_bounds * jax.scipy.special.logsumexp(-Yverts / tau_bounds, axis=0)
+
+    return y_lo, y_hi  # each shape (2,)

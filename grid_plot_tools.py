@@ -2,6 +2,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import itertools
+from matplotlib.collections import PolyCollection
+from matplotlib.patches import Circle
 
 CENTER = np.array([5.0, 5.0])
 
@@ -151,4 +153,131 @@ def grid_plotter(M, y1_vals, y2_vals, x1_min, x1_max, x2_min, x2_max):
     ax_y.set_ylim(bounds_y["y2"][0]-1, bounds_y["y2"][1]+1)
     ax_y.grid(True, alpha=0.3)
 
+    plt.show()
+
+
+def plot_x_grid_satisfaction(
+    M,
+    y1_params,
+    y2_params,
+    *,
+    kripke_structure,
+    sat,
+    x_star=None,
+    radius=None,
+    x_domain=None,
+    goal_ap="g",
+    figsize=(7, 7),
+    alpha=0.6,
+):
+    """Plot the affine grid in X-space and color each cell by satisfaction.
+
+    Parameters
+    ----------
+    M : array-like shape (2,2)
+        Linear map x = M y.
+    y1_params, y2_params : array-like
+        Monotone grid line coordinates in y-space. Cells are the rectangles
+        [y1[i],y1[i+1]] x [y2[j],y2[j+1]].
+    kripke_structure : pyModelChecking.kripke.Kripke
+        Used only for goal cell indication via its labelling function.
+    sat : set[int]
+        Set of Kripke state IDs that satisfy the checked state formula.
+    x_domain : tuple (x1_min, x1_max, x2_min, x2_max) or None
+        If provided, draws the X-domain rectangle.
+    goal_ap : str
+        Atomic proposition that marks goal cells (default: "g").
+    x_star : array-like shape (2,), optional
+        Center of goal circle in X-space.
+    radius : float, optional
+        Radius of goal circle in X-space. If provided with x_star, a circle is drawn.
+    """
+    M = np.asarray(M, dtype=float)
+    y1_params = np.asarray(y1_params, dtype=float)
+    y2_params = np.asarray(y2_params, dtype=float)
+    sat = set(sat)
+
+    n1 = len(y1_params) - 1
+    n2 = len(y2_params) - 1
+
+    # Grab state->AP-set mapping from pyModelChecking
+    try:
+        labels_by_state = kripke_structure.labelling_function()
+    except Exception:
+        labels_by_state = getattr(kripke_structure, "_labels", {})
+
+    def state_id(i, j):
+        return i * n2 + j
+
+    polys = []
+    facecolors = []
+    edgecolors = []
+    linewidths = []
+
+    for i in range(n1):
+        y1_lo, y1_hi = y1_params[i], y1_params[i + 1]
+        for j in range(n2):
+            y2_lo, y2_hi = y2_params[j], y2_params[j + 1]
+            corners_y = np.array(
+                [
+                    [y1_lo, y2_lo],
+                    [y1_lo, y2_hi],
+                    [y1_hi, y2_hi],
+                    [y1_hi, y2_lo],
+                ],
+                dtype=float,
+            )
+            corners_x = (M @ corners_y.T).T
+            polys.append(corners_x)
+
+            sid = state_id(i, j)
+            is_sat = sid in sat
+            aps = labels_by_state.get(sid, set())
+            is_goal = goal_ap in aps
+
+            facecolors.append((0.2, 0.7, 0.2, alpha) if is_sat else (0.85, 0.2, 0.2, alpha))
+            if is_goal:
+                edgecolors.append((0.0, 0.0, 0.0, 1.0))
+                linewidths.append(2.0)
+            else:
+                edgecolors.append((0.0, 0.0, 0.0, 0.25))
+                linewidths.append(0.5)
+
+    fig, ax = plt.subplots(1, 1, figsize=figsize, constrained_layout=True)
+    coll = PolyCollection(polys, facecolors=facecolors, edgecolors=edgecolors, linewidths=linewidths, closed=True)
+    ax.add_collection(coll)
+
+    if x_star is not None and radius is not None:
+        x_star = np.asarray(x_star, dtype=float).reshape(2,)
+        circ = Circle((float(x_star[0]), float(x_star[1])), float(radius), fill=False, color="k", linewidth=2.0)
+        ax.add_patch(circ)
+
+    if x_domain is not None:
+        x1_min, x1_max, x2_min, x2_max = map(float, x_domain)
+        verts_x = np.array(
+            [
+                [x1_min, x2_min],
+                [x1_min, x2_max],
+                [x1_max, x2_max],
+                [x1_max, x2_min],
+                [x1_min, x2_min],
+            ],
+            dtype=float,
+        )
+        ax.plot(verts_x[:, 0], verts_x[:, 1], color="k", linewidth=1.5)
+        ax.set_xlim(x1_min, x1_max)
+        ax.set_ylim(x2_min, x2_max)
+    else:
+        all_pts = np.vstack(polys)
+        mins = all_pts.min(axis=0)
+        maxs = all_pts.max(axis=0)
+        pad = 0.05 * float(np.max(maxs - mins) + 1e-12)
+        ax.set_xlim(mins[0] - pad, maxs[0] + pad)
+        ax.set_ylim(mins[1] - pad, maxs[1] + pad)
+
+    ax.set_title("x-space grid (green=satisfies, red=fails")
+    ax.set_xlabel("x1")
+    ax.set_ylabel("x2")
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(True, alpha=0.25)
     plt.show()
