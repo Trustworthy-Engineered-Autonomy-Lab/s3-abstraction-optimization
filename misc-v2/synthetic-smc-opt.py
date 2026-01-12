@@ -1,7 +1,7 @@
 # Libraries
 import numpy as np
 import grid_plot_tools as gpt
-from fnr_objective_tools import soft_adversarial_reach_objective, trans_matrix, extract_grid_params
+from smc_objective_tools import soft_adversarial_reach_objective, trans_matrix, extract_grid_params
 from model_checking_tools import model_check_tessellation
 import jax
 import jax.numpy as jnp
