@@ -281,3 +281,131 @@ def plot_x_grid_satisfaction(
     ax.set_aspect("equal", adjustable="box")
     ax.grid(True, alpha=0.25)
     plt.show()
+
+
+def plot_x_grid_false_negative_map(
+    M,
+    y1_params,
+    y2_params,
+    *,
+    sat,
+    false_negative_states,
+    x_star=None,
+    radius=None,
+    x_domain=None,
+    figsize=(7, 7),
+    alpha=0.6,
+    show_legend=True,
+):
+    """Plot the affine grid in X-space colored by TP/FN/TN.
+
+    Coloring convention
+    -------------------
+    - True positives (TP): state id in `sat` -> green
+    - False negatives (FN): state id in `false_negative_states` -> light blue
+    - True negatives (TN): everything else -> red
+
+    Notes
+    -----
+    This assumes your abstraction/model checking regime produces no false positives.
+    If a state appears in both `sat` and `false_negative_states`, `sat` wins.
+    """
+    M = np.asarray(M, dtype=float)
+    y1_params = np.asarray(y1_params, dtype=float)
+    y2_params = np.asarray(y2_params, dtype=float)
+    sat = set(sat)
+    false_negative_states = set(false_negative_states)
+
+    n1 = len(y1_params) - 1
+    n2 = len(y2_params) - 1
+
+    def state_id(i, j):
+        return i * n2 + j
+
+    polys = []
+    facecolors = []
+    edgecolors = []
+    linewidths = []
+
+    tp_color = (0.2, 0.7, 0.2, alpha)
+    fn_color = (0.55, 0.80, 1.0, alpha)
+    tn_color = (0.85, 0.2, 0.2, alpha)
+
+    for i in range(n1):
+        y1_lo, y1_hi = y1_params[i], y1_params[i + 1]
+        for j in range(n2):
+            y2_lo, y2_hi = y2_params[j], y2_params[j + 1]
+            corners_y = np.array(
+                [
+                    [y1_lo, y2_lo],
+                    [y1_lo, y2_hi],
+                    [y1_hi, y2_hi],
+                    [y1_hi, y2_lo],
+                ],
+                dtype=float,
+            )
+            corners_x = (M @ corners_y.T).T
+            polys.append(corners_x)
+
+            sid = state_id(i, j)
+            if sid in sat:
+                facecolors.append(tp_color)
+            elif sid in false_negative_states:
+                facecolors.append(fn_color)
+            else:
+                facecolors.append(tn_color)
+
+            edgecolors.append((0.0, 0.0, 0.0, 0.15))
+            linewidths.append(0.35)
+
+    fig, ax = plt.subplots(1, 1, figsize=figsize, constrained_layout=True)
+    coll = PolyCollection(polys, facecolors=facecolors, edgecolors=edgecolors, linewidths=linewidths, closed=True)
+    ax.add_collection(coll)
+
+    if x_star is not None and radius is not None:
+        x_star = np.asarray(x_star, dtype=float).reshape(2,)
+        circ = Circle((float(x_star[0]), float(x_star[1])), float(radius), fill=False, color="k", linewidth=2.0)
+        ax.add_patch(circ)
+
+    if x_domain is not None:
+        x1_min, x1_max, x2_min, x2_max = map(float, x_domain)
+        verts_x = np.array(
+            [
+                [x1_min, x2_min],
+                [x1_min, x2_max],
+                [x1_max, x2_max],
+                [x1_max, x2_min],
+                [x1_min, x2_min],
+            ],
+            dtype=float,
+        )
+        ax.plot(verts_x[:, 0], verts_x[:, 1], color="k", linewidth=1.5)
+        ax.set_xlim(x1_min, x1_max)
+        ax.set_ylim(x2_min, x2_max)
+    else:
+        all_pts = np.vstack(polys)
+        mins = all_pts.min(axis=0)
+        maxs = all_pts.max(axis=0)
+        pad = 0.05 * float(np.max(maxs - mins) + 1e-12)
+        ax.set_xlim(mins[0] - pad, maxs[0] + pad)
+        ax.set_ylim(mins[1] - pad, maxs[1] + pad)
+
+    if show_legend:
+        from matplotlib.patches import Patch
+
+        ax.legend(
+            handles=[
+                Patch(facecolor=tp_color, edgecolor="none", label="True positive (sat)"),
+                Patch(facecolor=fn_color, edgecolor="none", label="False negative (safe but unsat)"),
+                Patch(facecolor=tn_color, edgecolor="none", label="True negative (unsat)"),
+            ],
+            loc="lower left",
+            framealpha=0.9,
+        )
+
+    ax.set_title("model checking results")
+    ax.set_xlabel("x1")
+    ax.set_ylabel("x2")
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(True, alpha=0.25)
+    plt.show()

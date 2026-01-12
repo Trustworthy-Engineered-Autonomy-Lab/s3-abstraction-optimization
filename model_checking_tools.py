@@ -135,7 +135,7 @@ def make_kripke_from_params(x_domain, x_star, radius, y1_params, y2_params, M):
             if hits_oob:
                 kripke_transitions.add((src, oob_state_id))
             kripke_labels[src] = label
-            print(f"{src}: {label[0]} cell ({i},{j}) -> {len(succ_cells)} in-grid successors" + (" + OOB" if hits_oob else ""))
+            # print(f"{src}: {label[0]} cell ({i},{j}) -> {len(succ_cells)} in-grid successors" + (" + OOB" if hits_oob else ""))
 
     # Label the out-of-bounds state; add self-loop
     kripke_labels[oob_state_id] = ['fail']
@@ -163,6 +163,73 @@ def model_check_kripke(kripke_structure):
     
     return sat
 
+
+def check_ground_truth(x_domain, x_star, radius, y1_params, y2_params, M):
+
+    # Unpack domain parameters
+    x1_min, x1_max, x2_min, x2_max = map(float, x_domain)
+    x_star = np.asarray(x_star, dtype=float)
+
+    # Initialize ground truth dictionary
+    nstates_1 = len(y1_params) - 1
+    nstates_2 = len(y2_params) - 1
+    ground_truth_check = {}
+
+    # ID labeling function
+    def cell_state_id(i, j):
+        return i * nstates_2 + j
+
+    # Precompute transformation matrix
+    M = np.asarray(M, dtype=float)
+
+    # Loop through each abstract state
+    for i in range(nstates_1):
+        y1_lo, y1_hi = y1_params[i], y1_params[i+1]
+        for j in range(nstates_2):
+            y2_lo, y2_hi = y2_params[j], y2_params[j+1]
+
+            # Transform corners to x-space
+            corners = np.array([
+                [y1_lo, y2_lo],
+                [y1_lo, y2_hi],
+                [y1_hi, y2_hi],
+                [y1_hi, y2_lo]])
+            x_verts = (M @ corners.T).T
+
+            # Push vertices through dynamics until any fail or all succeed
+            src = cell_state_id(i, j)
+            max_steps = 10_000
+            any_oob = False
+            all_goal = False
+            reached_terminal = False
+            for _ in range(max_steps):
+                any_oob = any(
+                    (v[0] < x1_min) or (v[0] > x1_max) or (v[1] < x2_min) or (v[1] > x2_max)
+                    for v in x_verts
+                )
+                if any_oob:
+                    ground_truth_check[src] = 'fail'
+                    reached_terminal = True
+                    break
+
+                all_goal = all(np.linalg.norm(v - x_star) <= radius for v in x_verts)
+                if all_goal:
+                    ground_truth_check[src] = 'goal'
+                    reached_terminal = True
+                    break
+
+                x_verts = dynamics(x_verts)
+
+            if not reached_terminal:
+                ground_truth_check[src] = 'unk'
+
+            # print(f"Cell ({i},{j}): " +
+            #       ("OOB reached" if any_oob else
+            #        "All goal reached" if all_goal else
+            #        "Neither OOB nor all goal reached"))
+
+    return ground_truth_check
+
 if __name__ == "__main__":
 
     K = pmc.Kripke(S=[0, 1, 3],
@@ -171,4 +238,3 @@ if __name__ == "__main__":
 
     print(K.states())
     print(K.transitions())
-    
