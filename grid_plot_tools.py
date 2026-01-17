@@ -1,11 +1,25 @@
 # Libraries
 import numpy as np
-import matplotlib.pyplot as plt
 import itertools
-from matplotlib.collections import PolyCollection
-from matplotlib.patches import Circle
+
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PolyCollection
+    from matplotlib.patches import Circle
+except ModuleNotFoundError:
+    plt = None
+    PolyCollection = None
+    Circle = None
 
 CENTER = np.array([5.0, 5.0])
+
+
+def _require_matplotlib():
+    if plt is None:
+        raise ModuleNotFoundError(
+            "matplotlib is required for plotting. Install it with `pip install matplotlib` "
+            "or avoid calling plotting helpers."
+        )
 
 def order_vertices_ccw(verts):
     """Order 2D polygon vertices counter-clockwise to avoid self-intersecting plots."""
@@ -79,6 +93,8 @@ def line_segment_in_rect(p, d, x1_min, x1_max, x2_min, x2_max):
 
 # Plotting function for grids in X and Y spaces
 def grid_plotter(M, y1_vals, y2_vals, x1_min, x1_max, x2_min, x2_max):
+
+    _require_matplotlib()
 
     fig, (ax_y, ax_x) = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
 

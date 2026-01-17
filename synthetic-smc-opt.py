@@ -8,33 +8,6 @@ import jax.numpy as jnp
 
 CENTER = np.array([5.0, 5.0])
 
-def adam_optimize(params, obj_fn, obj_kwargs, steps=2000, lr=1e-3,
-                  b1=0.9, b2=0.999, eps=1e-8, clip=10.0, print_every=100):
-    m = jnp.zeros_like(params)
-    v = jnp.zeros_like(params)
-
-    value_and_grad = jax.jit(jax.value_and_grad(lambda p: obj_fn(p, **obj_kwargs)))
-
-    for t in range(1, steps + 1):
-        val, g = value_and_grad(params)
-
-        # optional grad clip (helps a lot early on)
-        gnorm = jnp.linalg.norm(g)
-        g = jnp.where(gnorm > clip, g * (clip / (gnorm + 1e-12)), g)
-
-        m = b1 * m + (1 - b1) * g
-        v = b2 * v + (1 - b2) * (g * g)
-        mhat = m / (1 - b1 ** t)
-        vhat = v / (1 - b2 ** t)
-
-        params = params - lr * mhat / (jnp.sqrt(vhat) + eps)
-
-        if (t % print_every) == 0 or t == 1:
-            print(f"step {t:5d} | obj {float(val):.6f} | ||g|| {float(gnorm):.6f}")
-
-    return params
-
-
 if __name__ == "__main__":
 
 
@@ -65,46 +38,16 @@ if __name__ == "__main__":
     y2_lo, y2_hi = bounds_y["y2"][0], bounds_y["y2"][1]
 
     # Uniform grid in y-space
-    n1_internal = 10
-    n2_internal = 10
-    y1_params_ends = jnp.linspace(y1_lo, y1_hi, n1_internal + 2) # include boundaries
-    y2_params_ends = jnp.linspace(y2_lo, y2_hi, n2_internal + 2) #
+    n1_internal = 80
+    n2_internal = 80
+    y1_params_ends = np.linspace(y1_lo, y1_hi, n1_internal + 2) # include boundaries
+    y2_params_ends = np.linspace(y2_lo, y2_hi, n2_internal + 2) #
 
     # params = jnp.concatenate([u1, u2, jnp.array([theta, a1, a2, h])])
 
     cost = objective(x_domain, x_star, radius, y1_params_ends, y2_params_ends, M)
     print(f"Initial cost: {cost:.6f}")
 
-    A_jax = jnp.array([[0.8, -0.3],
-                       [0.3,  0.8]])
-
-    def obj_for_grads(y1p, y2p, th, s1p, s2p, hp):
-        return objective_jax(
-            x_domain=x_domain,
-            x_star=x_star,
-            y1_params=y1p,
-            y2_params=y2p,
-            theta=th,
-            s1=s1p,
-            s2=s2p,
-            h=hp,
-            A=A_jax,
-        )
-
-    (gy1, gy2, gtheta, gs1, gs2, gh) = jax.grad(obj_for_grads, argnums=(0, 1, 2, 3, 4, 5))(
-        y1_params_ends,
-        y2_params_ends,
-        theta,
-        s1,
-        s2,
-        h,
-    )
-    print("||∂J/∂y1_params||:", float(jnp.linalg.norm(gy1)))
-    print("||∂J/∂y2_params||:", float(jnp.linalg.norm(gy2)))
-    print("∂J/∂theta:", float(gtheta))
-    print("∂J/∂s1:", float(gs1))
-    print("∂J/∂s2:", float(gs2))
-    print("∂J/∂h:", float(gh))
 
     # # Define the system transition matrix
     # A = np.array([[0.8, -0.3],

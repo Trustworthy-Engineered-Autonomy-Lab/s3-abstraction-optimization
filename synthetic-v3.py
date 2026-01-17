@@ -32,8 +32,8 @@ if __name__ == "__main__":
     y2_lo, y2_hi = bounds_y["y2"][0], bounds_y["y2"][1]
 
     # Uniform grid in y-space
-    n1_internal = 100
-    n2_internal = 100
+    n1_internal = 80
+    n2_internal = 80
     y1_params_ends = np.linspace(y1_lo, y1_hi, n1_internal + 2) # include boundaries
     y2_params_ends = np.linspace(y2_lo, y2_hi, n2_internal + 2) #
 

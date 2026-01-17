@@ -1,41 +1,81 @@
 # Libraries
 import numpy as np
-import grid_plot_tools as gpt
-from spread_objective_tools import trans_matrix, diff_objective_reg, extract_grid_params
+from grid_plot_tools import get_yspace_bounds, grid_plotter
+from spread_objective_tools import trans_matrix, diff_objective, extract_grid_params
 from model_checking_tools import make_kripke_from_params, model_check_kripke, check_ground_truth, false_negative_rate
 import jax
 import jax.numpy as jnp
+from typing import Optional, Union
 
 CENTER = np.array([5.0, 5.0])
 
-def adam_optimize(params, obj_fn, obj_kwargs, steps=2000, lr=1e-2,
-                  b1=0.9, b2=0.999, eps=1e-8, clip=10.0, print_every=100):
-    m = jnp.zeros_like(params)
-    v = jnp.zeros_like(params)
 
-    value_and_grad = jax.jit(jax.value_and_grad(lambda p: obj_fn(p, **obj_kwargs)))
+def gradient_descent_optimize(
+    params_init: jnp.ndarray,
+    objective_fn,
+    objective_kwargs: dict,
+    steps: int,
+    *,
+    lr: Union[float, jnp.ndarray] = 1e-2,
+    clip: Optional[float] = None,
+    print_every: int = 100,
+    project_theta: bool = True,
+):
+    """Basic gradient descent loop for a flat params vector.
 
-    for t in range(1, steps + 1):
-        val, g = value_and_grad(params)
+    - Uses JAX `value_and_grad` for gradients.
+    - Optional elementwise gradient clipping.
+    - Optional projection of the last 4 params (theta,a1,a2,h) to keep theta wrapped.
+    """
 
-        # optional grad clip (helps a lot early on)
-        gnorm = jnp.linalg.norm(g)
-        g = jnp.where(gnorm > clip, g * (clip / (gnorm + 1e-12)), g)
+    value_and_grad_fn = jax.value_and_grad(objective_fn)
 
-        m = b1 * m + (1 - b1) * g
-        v = b2 * v + (1 - b2) * (g * g)
-        mhat = m / (1 - b1 ** t)
-        vhat = v / (1 - b2 ** t)
+    @jax.jit
+    def step(params: jnp.ndarray, step_lr: jnp.ndarray):
+        val, grad = value_and_grad_fn(params, **objective_kwargs)
+        if clip is not None:
+            grad = jnp.clip(grad, -clip, clip)
+        # `step_lr` can be a scalar () or a vector (params.shape)
+        new_params = params - step_lr * grad
 
-        # params = params - lr * mhat / (jnp.sqrt(vhat) + eps)
-        # Update only the last 4 parameters
-        update = lr * mhat[-4:] / (jnp.sqrt(vhat[-4:]) + eps)
-        params = params.at[-4:].add(-update)
+        if project_theta:
+            # params layout: [u1 (n1), u2 (n2), theta, a1, a2, h]
+            theta = new_params[-4]
+            theta = (theta + jnp.pi) % (2 * jnp.pi) - jnp.pi
+            new_params = new_params.at[-4].set(theta)
 
-        if (t % print_every) == 0 or t == 1:
-            print(f"step {t:5d} | obj {float(val):.6f} | ||g|| {float(gnorm):.6f}")
+        return new_params, val, grad
 
-    return params
+    params = params_init
+
+    # Allow scalar lr or per-parameter lr vector.
+    if isinstance(lr, (int, float)):
+        lr_arr = jnp.asarray(lr, dtype=params.dtype)
+    else:
+        lr_arr = jnp.asarray(lr, dtype=params.dtype)
+        if lr_arr.shape != params.shape:
+            raise ValueError(f"per-parameter lr must have shape {params.shape}, got {lr_arr.shape}")
+    last_val = None
+
+    for k in range(steps):
+        params, val, grad = step(params, lr_arr)
+        last_val = val
+
+        if (k % print_every) == 0 or k == steps - 1:
+            grad_norm = jnp.linalg.norm(grad)
+            if lr_arr.shape == ():
+                lr_msg = f"lr={float(lr_arr):.2e}"
+            else:
+                # Handy diagnostics: typical step sizes by block
+                n_last = 4
+                step_u_max = float(jnp.max(jnp.abs(lr_arr[:-n_last] * grad[:-n_last])))
+                step_last_max = float(jnp.max(jnp.abs(lr_arr[-n_last:] * grad[-n_last:])))
+                lr_msg = f"lr_u~{float(jnp.max(lr_arr[:-n_last])):.2e} lr_last4={list(map(float, lr_arr[-n_last:]))}  step_u_max={step_u_max:.2e} step_last4_max={step_last_max:.2e}"
+
+            print(f"step={k:5d}  obj={float(val): .6e}  grad_norm={float(grad_norm): .6e}  {lr_msg}")
+
+    return params, last_val
+
 
 
 if __name__ == "__main__":
@@ -52,18 +92,40 @@ if __name__ == "__main__":
     radius = 2.0
 
     # Initial tessellation parameters
-    n1_internal = 100
-    n2_internal = 100
+    n1_internal = 80
+    n2_internal = 80
     key = jax.random.PRNGKey(0)
-    u1 = jnp.zeros((n1_internal,))
-    u2 = jnp.zeros((n2_internal,))
-    theta = -jnp.pi/4
-    a1, a2 = 0.0, 0.0
-    h = 0.0
+
+    # Random initialization
+    # u1/u2 are unconstrained; actual grid gaps come from softplus(u) then normalization.
+    use_random_init = True
+    sigma_u = 0.05      # spacing log-gap noise; smaller => closer to uniform spacing
+    sigma_a = 0.05      # scale log-params (a1/a2); s1,s2 = exp(a)
+    sigma_h = 0.02      # shear
+
+    if use_random_init:
+        key, k_u1, k_u2, k_th, k_a, k_h = jax.random.split(key, 6)
+        u1 = sigma_u * jax.random.normal(k_u1, (n1_internal,))
+        u2 = sigma_u * jax.random.normal(k_u2, (n2_internal,))
+
+        # Either a small normal perturbation around 0, or swap to uniform if you prefer:
+        # theta = jax.random.uniform(k_th, (), minval=-jnp.pi, maxval=jnp.pi)
+        theta = 0.25 * jax.random.normal(k_th, ())
+
+        a1 = sigma_a * jax.random.normal(k_a, ())
+        a2 = sigma_a * jax.random.normal(k_a, ())
+        h = sigma_h * jax.random.normal(k_h, ())
+    else:
+        u1 = jnp.zeros((n1_internal,))  # initial uniform spacing
+        u2 = jnp.zeros((n2_internal,))
+        theta = 0  # -jnp.pi/4
+        a1, a2 = 0.0, 0.0
+        h = 0.0
+
 
     # Compute y-domain bounds from x-domain and transformation
     M = np.array(trans_matrix(theta, a1, a2, h))
-    bounds_y, verts_y = gpt.get_yspace_bounds(
+    bounds_y, verts_y = get_yspace_bounds(
         M,
         x1_min, x1_max,
         x2_min, x2_max
@@ -74,76 +136,99 @@ if __name__ == "__main__":
 
     # Pack initial params; check initial objective + grad
     params = jnp.concatenate([u1, u2, jnp.array([theta, a1, a2, h])])
-    val, grad = jax.value_and_grad(diff_objective_reg)(
+    val, grad = jax.value_and_grad(diff_objective)(
         params,
         A=A, center=CENTER,
         y1_lo=y1_lo, y1_hi=y1_hi, y2_lo=y2_lo, y2_hi=y2_hi,
         n1_internal=n1_internal, n2_internal=n2_internal,
-        tau=0.05, min_gap=0.0
+        tau=0.05,
+        min_gap=0.0,
+        weight_mode="cell_area_y",
+        weight_power=1.0,
     )
+    print(grad)
 
-
-
-    # Run model checking and compute FNR with these initial tessellation parameters
-    M, y1_params, y2_params = extract_grid_params(
-    params,
-    n1_internal=n1_internal, n2_internal=n2_internal,
-    x1_min=x1_min, x1_max=x1_max, x2_min=x2_min, x2_max=x2_max,
-    min_gap=0.0)
-    y1_params_ends = np.concatenate(([y1_lo], np.array(y1_params), [y1_hi]))
-    y2_params_ends = np.concatenate(([y2_lo], np.array(y2_params), [y2_hi]))
-    ground_truth_check = check_ground_truth(x_domain, x_star, radius,
-                                            y1_params_ends, y2_params_ends, M)
-    kripke_structure = make_kripke_from_params(x_domain, x_star, radius,
-                                               y1_params_ends, y2_params_ends, M)
-    sat_init_states = model_check_kripke(kripke_structure)
-    checked_safe_states = set(sat_init_states)
-    true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
-    fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
-    print(f"False Negative Rate (FNR): {fnr:.4f}")
-
-
-
-
-
-    # Compute false negative rate
-    checked_safe_states = set(sat_init_states)
-    true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
-    fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
-    print(f"False Negative Rate (FNR): {fnr:.4f}")
-    
-    # Optimization
+    # Basic gradient descent training loop
     obj_kwargs = dict(
-    A=jnp.asarray(A),
-    center=jnp.asarray(CENTER),
-    y1_lo=y1_lo, y1_hi=y1_hi,
-    y2_lo=y2_lo, y2_hi=y2_hi,
-    n1_internal=n1_internal, n2_internal=n2_internal,
-    tau=0.05,
-    min_gap=0.0,          # you can also try min_gap > 0
-    lam_gap=50.0,         # start moderately strong
-    lam_det=10.0,
-    lam_cond=1e-3,
-    lam_shear=1e-2)
-    params_opt = adam_optimize(params, diff_objective_reg, obj_kwargs, steps=2000, lr=1e-2, clip=50.0)
-
-    # Run model checking and compute FNR with these new tessellation parameters
+        A=jnp.asarray(A),
+        center=jnp.asarray(CENTER),
+        y1_lo=y1_lo, y1_hi=y1_hi,
+        y2_lo=y2_lo, y2_hi=y2_hi,
+        n1_internal=n1_internal, n2_internal=n2_internal,
+        tau=0.05,
+        min_gap=0.0,
+        weight_mode="cell_area_y",
+        weight_power=1.0,
+    )
+    params_opt, final_val = gradient_descent_optimize(
+        params,
+        diff_objective,
+        obj_kwargs,
+        steps=10000,
+        # Per-parameter learning rates: spacings (u1,u2) vs (theta,a1,a2,h)
+        lr=jnp.concatenate(
+            [
+                1e-1 * jnp.ones_like(u1),
+                1e-1 * jnp.ones_like(u2),
+                jnp.array([1e-2, 1e-3, 1e-3, 0]),
+            ]
+        ),
+        clip=50.0,
+        print_every=500,
+    )
+    print("Final objective:", float(final_val))
+    
     M, y1_params, y2_params = extract_grid_params(
     params_opt,
     n1_internal=n1_internal, n2_internal=n2_internal,
     x1_min=x1_min, x1_max=x1_max, x2_min=x2_min, x2_max=x2_max,
     min_gap=0.0)
-    y1_params_ends = np.concatenate(([y1_lo], np.array(y1_params), [y1_hi]))
-    y2_params_ends = np.concatenate(([y2_lo], np.array(y2_params), [y2_hi]))
-    ground_truth_check = check_ground_truth(x_domain, x_star, radius,
-                                            y1_params_ends, y2_params_ends, M)
-    kripke_structure = make_kripke_from_params(x_domain, x_star, radius,
-                                               y1_params_ends, y2_params_ends, M)
-    sat_init_states = model_check_kripke(kripke_structure)
-    checked_safe_states = set(sat_init_states)
-    true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
-    fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
-    print(f"False Negative Rate (FNR): {fnr:.4f}")
+    grid_plotter(M, y1_params, y2_params, x1_min, x1_max, x2_min, x2_max)
+
+    
+    # # Optimization
+    # obj_kwargs = dict(
+    # A=jnp.asarray(A),
+    # center=jnp.asarray(CENTER),
+    # y1_lo=y1_lo, y1_hi=y1_hi,
+    # y2_lo=y2_lo, y2_hi=y2_hi,
+    # n1_internal=n1_internal, n2_internal=n2_internal,
+    # tau=0.05,
+    # min_gap=0.0,          # you can also try min_gap > 0
+    # lam_gap=50.0,         # start moderately strong
+    # lam_det=10.0,
+    # lam_cond=1e-3,
+    # lam_shear=1e-2)
+    # params_opt = adam_optimize(params, diff_objective_reg, obj_kwargs, steps=2000, lr=1e-2, clip=50.0)
+
+
+
+
+    # # Compute false negative rate
+    # checked_safe_states = set(sat_init_states)
+    # true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
+    # fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
+    # print(f"False Negative Rate (FNR): {fnr:.4f}")
+
+
+
+    # # Run model checking and compute FNR with these new tessellation parameters
+    # M, y1_params, y2_params = extract_grid_params(
+    # params_opt,
+    # n1_internal=n1_internal, n2_internal=n2_internal,
+    # x1_min=x1_min, x1_max=x1_max, x2_min=x2_min, x2_max=x2_max,
+    # min_gap=0.0)
+    # y1_params_ends = np.concatenate(([y1_lo], np.array(y1_params), [y1_hi]))
+    # y2_params_ends = np.concatenate(([y2_lo], np.array(y2_params), [y2_hi]))
+    # ground_truth_check = check_ground_truth(x_domain, x_star, radius,
+    #                                         y1_params_ends, y2_params_ends, M)
+    # kripke_structure = make_kripke_from_params(x_domain, x_star, radius,
+    #                                            y1_params_ends, y2_params_ends, M)
+    # sat_init_states = model_check_kripke(kripke_structure)
+    # checked_safe_states = set(sat_init_states)
+    # true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
+    # fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
+    # print(f"False Negative Rate (FNR): {fnr:.4f}")
     # gpt.grid_plotter(M, y1_params, y2_params, x1_min, x1_max, x2_min, x2_max)
 
     # gpt.plot_x_grid_false_negative_map(

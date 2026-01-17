@@ -185,8 +185,22 @@ def softmax_tau(x, tau):
 def softmin_tau(x, tau):
     return -tau * jax.scipy.special.logsumexp(-x / tau, axis=-1)
 
-def diff_objective(params, *, A, center, y1_lo, y1_hi, y2_lo, y2_hi,
-              n1_internal, n2_internal, tau=0.05, min_gap=0.0):
+def diff_objective(
+    params,
+    *,
+    A,
+    center,
+    y1_lo,
+    y1_hi,
+    y2_lo,
+    y2_hi,
+    n1_internal,
+    n2_internal,
+    tau=0.05,
+    min_gap=0.0,
+    weight_mode: str = "uniform",
+    weight_power: float = 1.0,
+):
     """
     params packs:
       u1: (n1_internal,)   -> y1 internal gaps
@@ -233,7 +247,18 @@ def diff_objective(params, *, A, center, y1_lo, y1_hi, y2_lo, y2_hi,
     # area spread
     spread = w[..., 0] * w[..., 1]     # (n1,n2)
 
-    return jnp.mean(spread)
+    # Weight larger cells more heavily to discourage "sacrificed" giant cells.
+    if weight_mode == "uniform":
+        return jnp.mean(spread)
+
+    if weight_mode == "cell_area_y":
+        dy1 = (y1b - y1a)  # (n1,)
+        dy2 = (y2b - y2a)  # (n2,)
+        cell_area = dy1[:, None] * dy2[None, :]  # (n1,n2)
+        weights = jnp.power(cell_area + 1e-12, weight_power)
+        return jnp.sum(weights * spread) / (jnp.sum(weights) + 1e-12)
+
+    raise ValueError(f"Unknown weight_mode: {weight_mode}")
 
 def extract_grid_params(params, *, n1_internal, n2_internal,
                           x1_min, x1_max, x2_min, x2_max,
@@ -283,82 +308,82 @@ def _gaps_from_u(u, lo, hi, min_gap=0.0):
     scale = (hi - lo) / (jnp.sum(gaps_raw) + 1e-12)  # normalize total length
     return gaps_raw * scale                          # sums to hi-lo
 
-def diff_objective_reg(params, *, A, center,
-                       y1_lo, y1_hi, y2_lo, y2_hi,
-                       n1_internal, n2_internal,
-                       tau=0.05, min_gap=0.0,
-                       # regularizer weights
-                       lam_gap=1.0,
-                       lam_det=10.0,
-                       lam_cond=1e-2,
-                       lam_shear=1e-1):
-    """
-    Same spread objective + regularizers to prevent degenerate grids.
-    """
-    A = jnp.asarray(A)
-    center = jnp.asarray(center)
+# def diff_objective_reg(params, *, A, center,
+#                        y1_lo, y1_hi, y2_lo, y2_hi,
+#                        n1_internal, n2_internal,
+#                        tau=0.05, min_gap=0.0,
+#                        # regularizer weights
+#                        lam_gap=1.0,
+#                        lam_det=10.0,
+#                        lam_cond=1e-2,
+#                        lam_shear=1e-1):
+#     """
+#     Same spread objective + regularizers to prevent degenerate grids.
+#     """
+#     A = jnp.asarray(A)
+#     center = jnp.asarray(center)
 
-    u1 = params[:n1_internal]
-    u2 = params[n1_internal:n1_internal+n2_internal]
-    theta, a1, a2, h = params[n1_internal+n2_internal:]
+#     u1 = params[:n1_internal]
+#     u2 = params[n1_internal:n1_internal+n2_internal]
+#     theta, a1, a2, h = params[n1_internal+n2_internal:]
 
-    # Transformation
-    M = trans_matrix(theta, a1, a2, h)
+#     # Transformation
+#     M = trans_matrix(theta, a1, a2, h)
 
-    # --- Build line locations (same as before) ---
-    y1 = make_lines_from_gaps(u1, y1_lo, y1_hi, min_gap=min_gap)
-    y2 = make_lines_from_gaps(u2, y2_lo, y2_hi, min_gap=min_gap)
+#     # --- Build line locations (same as before) ---
+#     y1 = make_lines_from_gaps(u1, y1_lo, y1_hi, min_gap=min_gap)
+#     y2 = make_lines_from_gaps(u2, y2_lo, y2_hi, min_gap=min_gap)
 
-    y1a, y1b = y1[:-1], y1[1:]
-    y2a, y2b = y2[:-1], y2[1:]
+#     y1a, y1b = y1[:-1], y1[1:]
+#     y2a, y2b = y2[:-1], y2[1:]
 
-    Y00 = jnp.stack(jnp.meshgrid(y1a, y2a, indexing="ij"), axis=-1)
-    Y01 = jnp.stack(jnp.meshgrid(y1a, y2b, indexing="ij"), axis=-1)
-    Y11 = jnp.stack(jnp.meshgrid(y1b, y2b, indexing="ij"), axis=-1)
-    Y10 = jnp.stack(jnp.meshgrid(y1b, y2a, indexing="ij"), axis=-1)
-    Ycorn = jnp.stack([Y00, Y01, Y11, Y10], axis=2)  # (n1,n2,4,2)
+#     Y00 = jnp.stack(jnp.meshgrid(y1a, y2a, indexing="ij"), axis=-1)
+#     Y01 = jnp.stack(jnp.meshgrid(y1a, y2b, indexing="ij"), axis=-1)
+#     Y11 = jnp.stack(jnp.meshgrid(y1b, y2b, indexing="ij"), axis=-1)
+#     Y10 = jnp.stack(jnp.meshgrid(y1b, y2a, indexing="ij"), axis=-1)
+#     Ycorn = jnp.stack([Y00, Y01, Y11, Y10], axis=2)  # (n1,n2,4,2)
 
-    Xcorn = (Ycorn @ M.T)
-    Xnext = center + (Xcorn - center) @ A.T
+#     Xcorn = (Ycorn @ M.T)
+#     Xnext = center + (Xcorn - center) @ A.T
 
-    xmax = softmax_tau(Xnext, tau)
-    xmin = softmin_tau(Xnext, tau)
-    w = xmax - xmin
-    spread = w[..., 0] * w[..., 1]
-    J_spread = jnp.mean(spread)
+#     xmax = softmax_tau(Xnext, tau)
+#     xmin = softmin_tau(Xnext, tau)
+#     w = xmax - xmin
+#     spread = w[..., 0] * w[..., 1]
+#     J_spread = jnp.mean(spread)
 
-    # -----------------------
-    # Regularizers (key part)
-    # -----------------------
+#     # -----------------------
+#     # Regularizers (key part)
+#     # -----------------------
 
-    # (1) Gap-uniformity penalty (prevents "pile-up" / giant cells)
-    L1 = (y1_hi - y1_lo)
-    L2 = (y2_hi - y2_lo)
-    gaps1 = _gaps_from_u(u1, y1_lo, y1_hi, min_gap=min_gap)  # sums to L1
-    gaps2 = _gaps_from_u(u2, y2_lo, y2_hi, min_gap=min_gap)  # sums to L2
+#     # (1) Gap-uniformity penalty (prevents "pile-up" / giant cells)
+#     L1 = (y1_hi - y1_lo)
+#     L2 = (y2_hi - y2_lo)
+#     gaps1 = _gaps_from_u(u1, y1_lo, y1_hi, min_gap=min_gap)  # sums to L1
+#     gaps2 = _gaps_from_u(u2, y2_lo, y2_hi, min_gap=min_gap)  # sums to L2
 
-    # Normalize so the penalty is scale-free
-    g1 = gaps1 / (L1 + 1e-12)
-    g2 = gaps2 / (L2 + 1e-12)
-    target1 = 1.0 / n1_internal
-    target2 = 1.0 / n2_internal
-    R_gap = jnp.mean((g1 - target1)**2) + jnp.mean((g2 - target2)**2)
+#     # Normalize so the penalty is scale-free
+#     g1 = gaps1 / (L1 + 1e-12)
+#     g2 = gaps2 / (L2 + 1e-12)
+#     target1 = 1.0 / n1_internal
+#     target2 = 1.0 / n2_internal
+#     R_gap = jnp.mean((g1 - target1)**2) + jnp.mean((g2 - target2)**2)
 
-    # (2) Determinant / scale control: discourage collapsing or blowing up M
-    # det(S) = exp(a1+a2) so keeping a1+a2 near 0 keeps det near 1
-    R_det = (a1 + a2)**2
+#     # (2) Determinant / scale control: discourage collapsing or blowing up M
+#     # det(S) = exp(a1+a2) so keeping a1+a2 near 0 keeps det near 1
+#     R_det = (a1 + a2)**2
 
-    # (3) Conditioning penalty: discourages needle-like/skewed transforms
-    Minv = jnp.linalg.inv(M)
-    R_cond = jnp.sum(M*M) + jnp.sum(Minv*Minv)  # ||M||_F^2 + ||M^{-1}||_F^2
+#     # (3) Conditioning penalty: discourages needle-like/skewed transforms
+#     Minv = jnp.linalg.inv(M)
+#     R_cond = jnp.sum(M*M) + jnp.sum(Minv*Minv)  # ||M||_F^2 + ||M^{-1}||_F^2
 
-    # (4) Shear penalty (optional but often stabilizes)
-    R_shear = h*h
+#     # (4) Shear penalty (optional but often stabilizes)
+#     R_shear = h*h
 
-    J = (J_spread
-         + lam_gap * R_gap
-         + lam_det * R_det
-         + lam_cond * R_cond
-         + lam_shear * R_shear)
+#     J = (J_spread
+#          + lam_gap * R_gap
+#          + lam_det * R_det
+#          + lam_cond * R_cond
+#          + lam_shear * R_shear)
 
-    return J
+#     return J

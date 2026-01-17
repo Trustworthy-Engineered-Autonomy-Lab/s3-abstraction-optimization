@@ -4,13 +4,66 @@ import pyModelChecking as pmc
 import grid_plot_tools as gpt
 import pyModelChecking.CTL as CTL
 from pyModelChecking.CTL import A, E, G, F, Imply
+import torch
+import torch.nn as nn
+from pathlib import Path
 
-def dynamics(state):
-    A = np.array([[0.8, -0.3],
-                  [0.3,  0.8]])
-    x_star = np.array([5.0, 5.0])
-    state = np.asarray(state, dtype=float)
-    return (state - x_star) @ A.T + x_star
+
+# MountainCar open-loop dynamics
+def mc_ol_dynamics(state, action):
+    p, v = state
+    v_next = v + 0.001*(action - 1) - 0.0025*np.cos(3*p)
+    v_next = np.clip(v_next, -0.07, 0.07)
+    p_next = p + v_next
+    p_next = np.clip(p_next, -1.2, 0.6)
+    if p_next <= -1.2 and v_next < 0:
+        v_next = 0.0
+    return np.array([p_next, v_next])
+
+# DQN policy
+class DQN(nn.Module):
+
+    # Initialize the neural network
+    def __init__(self, state_dim, action_dim, hidden_dim):
+        super(DQN, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim), # Input layer
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), # Hidden layer
+            nn.ReLU(),
+            nn.Linear(hidden_dim, action_dim) # Output layer
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+# Lazy-load cached policy (avoid re-instantiation)
+_DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+_POLICY_CACHE = None
+_POLICY_PATH = Path(__file__).resolve().parent / 'policy.pth'
+
+def get_policy():
+    global _POLICY_CACHE
+    if _POLICY_CACHE is None:
+        net = DQN(2, 3, 128).to(_DEVICE)
+        state_dict = torch.load(str(_POLICY_PATH), map_location=_DEVICE)
+        net.load_state_dict(state_dict)
+        net.eval()
+        _POLICY_CACHE = net
+    return _POLICY_CACHE
+
+def policy_action(state):
+    net = get_policy()
+    with torch.no_grad():
+        s = torch.as_tensor(state, dtype=torch.float32, device=_DEVICE).unsqueeze(0)
+        q = net(s)
+        return int(q.argmax(dim=1).item())
+
+# Closed-loop dynamics using greedy policy (no need to pass network each call)
+def mc_cl_dynamics(x):
+    x_np = np.asarray(x, dtype=np.float64)
+    a_idx = policy_action(x_np)
+    return mc_ol_dynamics(x_np, a_idx)
 
 
 # Helper to find intersecting cells from AABB in y-space
@@ -65,29 +118,22 @@ def point_in_parallelogram(p, verts, tol=1e-9):
 
 
 # Goal state labeling function
-def is_goal_state(x_space_vertices, x_star, radius):
-
-    # Return True iff all corners of the x-space cell are within the goal circle
+def is_goal_state(x_space_vertices):
     for v in x_space_vertices:
-        if np.linalg.norm(v - x_star) > radius:
+        if v[0] < 0.5:
             return False
     return True
 
 
-def make_kripke_from_params(x_domain, x_star, radius, y1_params, y2_params, M):
-
-    # Unpack domain parameters
-    x1_min, x1_max, x2_min, x2_max = x_domain
-    _, verts_y_domain = gpt.get_yspace_bounds(M, x1_min, x1_max, x2_min, x2_max)
+def make_kripke_from_params(y1_params, y2_params, M):
 
     # Initialize Kripke structure parameters
     nstates_1 = len(y1_params) - 1
     nstates_2 = len(y2_params) - 1
-    n_kripke_states = nstates_1 * nstates_2 + 1 # includes out of bounds state
-    oob_state_id = n_kripke_states - 1
+    n_kripke_states = nstates_1 * nstates_2
 
     # Initialize Kripike structure components
-    kripke_states = list(range(n_kripke_states))  # last state is out-of-bounds
+    kripke_states = list(range(n_kripke_states))
     kripke_transitions = set()
     kripke_labels = {}
 
@@ -112,48 +158,32 @@ def make_kripke_from_params(x_domain, x_star, radius, y1_params, y2_params, M):
 
             # Compute y-space image
             x_corners = (M @ corners.T).T
-            x_next = dynamics(x_corners)
+            x_next = np.array([mc_cl_dynamics(x_corner) for x_corner in x_corners])
             y_next = (invM @ x_next.T).T
 
             # Check label of current cell
-            label = ['goal'] if is_goal_state(
-                x_corners,
-                x_star=x_star,
-                radius=radius
-            ) else ['safe']
+            label = ['goal'] if is_goal_state(x_corners) else ['safe']
 
             # Identify successor cells
             y1_min, y1_max = float(y_next[:, 0].min()), float(y_next[:, 0].max())
             y2_min, y2_max = float(y_next[:, 1].min()), float(y_next[:, 1].max())
             succ_cells = intersecting_cells_from_y_aabb(y1_params, y2_params, y1_min, y1_max, y2_min, y2_max)
 
-            # Indicate if any successor goes out of bounds
-            hits_oob = any(not point_in_parallelogram(pt, verts_y_domain) for pt in y_next)
-
             # Allocate relations to Kripke structure components
             src = cell_state_id(i, j)
             for (ip, jp) in succ_cells:
                 dst = cell_state_id(ip, jp)
                 kripke_transitions.add((src, dst))
-            if hits_oob:
-                kripke_transitions.add((src, oob_state_id))
 
-            # Force self loop if no in-grid successors and no OOB transition
-            if (not succ_cells) and (not hits_oob):
-                kripke_transitions.add((src, src))
+            # # Force self loop if no in-grid successors and no OOB transition
+            # if (not succ_cells):
+            #     kripke_transitions.add((src, src))
 
             kripke_labels[src] = label
             # print(f"{src}: {label[0]} cell ({i},{j}) -> {len(succ_cells)} in-grid successors" + (" + OOB" if hits_oob else ""))
 
-    # Label the out-of-bounds state; add self-loop
-    kripke_labels[oob_state_id] = ['fail']
-    kripke_transitions.add((oob_state_id, oob_state_id))
-
     # Define initial states (in bounds, non-goal states)
-    initial_states = [
-        s for s in kripke_states
-        if s != oob_state_id#  and 'goal' not in kripke_labels[s]
-    ]
+    initial_states = [s for s in kripke_states]
 
     # Make the Kripke structure
     kripke_structure = pmc.Kripke(S=kripke_states,
@@ -166,17 +196,13 @@ def make_kripke_from_params(x_domain, x_star, radius, y1_params, y2_params, M):
 
 def model_check_kripke(kripke_structure):
 
-    phi = 'A (safe U goal)'  # Eventually reach goal
+    phi = 'A (F goal)'  # Eventually reach goal
     sat = CTL.modelcheck(kripke_structure, phi)
     
     return sat
 
 
-def check_ground_truth(x_domain, x_star, radius, y1_params, y2_params, M):
-
-    # Unpack domain parameters
-    x1_min, x1_max, x2_min, x2_max = map(float, x_domain)
-    x_star = np.asarray(x_star, dtype=float)
+def check_ground_truth(y1_params, y2_params, M):
 
     # Initialize ground truth dictionary
     nstates_1 = len(y1_params) - 1
@@ -207,26 +233,16 @@ def check_ground_truth(x_domain, x_star, radius, y1_params, y2_params, M):
             # Push vertices through dynamics until any fail or all succeed
             src = cell_state_id(i, j)
             max_steps = 10_000
-            any_oob = False
-            all_goal = False
             reached_terminal = False
             for _ in range(max_steps):
-                any_oob = any(
-                    (v[0] < x1_min) or (v[0] > x1_max) or (v[1] < x2_min) or (v[1] > x2_max)
-                    for v in x_verts
-                )
-                if any_oob:
-                    ground_truth_check[src] = 'fail'
-                    reached_terminal = True
-                    break
 
-                all_goal = all(np.linalg.norm(v - x_star) <= radius for v in x_verts)
-                if all_goal:
+                if is_goal_state(x_verts):
+                    print(f"Cell ({i},{j}): all goal reached")
                     ground_truth_check[src] = 'goal'
                     reached_terminal = True
                     break
 
-                x_verts = dynamics(x_verts)
+                x_verts = np.array([mc_cl_dynamics(v) for v in x_verts])
 
             if not reached_terminal:
                 ground_truth_check[src] = 'unk'
