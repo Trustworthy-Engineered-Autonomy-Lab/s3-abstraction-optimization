@@ -175,9 +175,9 @@ def make_kripke_from_params(y1_params, y2_params, M):
                 dst = cell_state_id(ip, jp)
                 kripke_transitions.add((src, dst))
 
-            # # Force self loop if no in-grid successors and no OOB transition
-            # if (not succ_cells):
-            #     kripke_transitions.add((src, src))
+            # Force self loop if no in-grid successors
+            if (not succ_cells):
+                kripke_transitions.add((src, src))
 
             kripke_labels[src] = label
             # print(f"{src}: {label[0]} cell ({i},{j}) -> {len(succ_cells)} in-grid successors" + (" + OOB" if hits_oob else ""))
@@ -200,6 +200,205 @@ def model_check_kripke(kripke_structure):
     sat = CTL.modelcheck(kripke_structure, phi)
     
     return sat
+
+
+
+def fixed_check_ground_truth(x_domain, x_star, radius, y1_params, y2_params, M, grid_resolution=100):
+
+    # Unpack domain parameters
+    x1_min, x1_max, x2_min, x2_max = map(float, x_domain)
+    x_star = np.asarray(x_star, dtype=float)
+
+    # Initialize a uniform grid over the x-domain
+    x1_vals = np.linspace(x1_min, x1_max, grid_resolution)
+    x2_vals = np.linspace(x2_min, x2_max, grid_resolution)
+
+    # Iterate through each grid cell; classify as 'fail', 'goal', or 'unk'
+    fixed_check = {}
+    for i in range(grid_resolution - 1):
+        for j in range(grid_resolution - 1):
+            x1_lo, x1_hi = x1_vals[i], x1_vals[i+1]
+            x2_lo, x2_hi = x2_vals[j], x2_vals[j+1]
+
+            # Define cell corners
+            corners = np.array([
+                [x1_lo, x2_lo],
+                [x1_lo, x2_hi],
+                [x1_hi, x2_hi],
+                [x1_hi, x2_lo]])
+            
+            # Push vertices through dynamics until any fail or all succeed
+            max_steps = 10_000
+            any_oob = False
+            all_goal = False
+            reached_terminal = False
+            for _ in range(max_steps):
+                any_oob = any(
+                    (v[0] < x1_min) or (v[0] > x1_max) or (v[1] < x2_min) or (v[1] > x2_max)
+                    for v in corners
+                )
+                if any_oob:
+                    fixed_check[(i, j)] = 'fail'
+                    reached_terminal = True
+                    break
+
+                all_goal = all(np.linalg.norm(v - x_star) <= radius for v in corners)
+                if all_goal:
+                    fixed_check[(i, j)] = 'goal'
+                    reached_terminal = True
+                    break
+
+                corners = np.array([mc_cl_dynamics(v) for v in corners])
+
+            if not reached_terminal:
+                fixed_check[(i, j)] = 'unk'
+
+    # --- Now classify the user's affine (y-grid) cells using the fixed x-grid labels ---
+    nstates_1 = len(y1_params) - 1
+    nstates_2 = len(y2_params) - 1
+
+    # ID labeling function for user abstraction cells
+    def cell_state_id(i, j):
+        return i * nstates_2 + j
+
+    M = np.asarray(M, dtype=float)
+
+    # Helper: over-approx candidate x-grid cells from an x-space AABB
+    def _intersecting_fixed_cells_from_x_aabb(x1_min_aabb, x1_max_aabb, x2_min_aabb, x2_max_aabb):
+        n1 = grid_resolution - 1
+        n2 = grid_resolution - 1
+
+        # If completely outside x-domain, return empty and let caller decide label.
+        if x1_max_aabb < x1_min or x1_min_aabb > x1_max or x2_max_aabb < x2_min or x2_min_aabb > x2_max:
+            return []
+
+        # Map AABB limits to grid-cell indices.
+        i_lo = int(np.searchsorted(x1_vals, x1_min_aabb, side="right") - 1)
+        i_hi = int(np.searchsorted(x1_vals, x1_max_aabb, side="right") - 1)
+        j_lo = int(np.searchsorted(x2_vals, x2_min_aabb, side="right") - 1)
+        j_hi = int(np.searchsorted(x2_vals, x2_max_aabb, side="right") - 1)
+
+        i_lo = max(0, min(n1 - 1, i_lo))
+        i_hi = max(0, min(n1 - 1, i_hi))
+        j_lo = max(0, min(n2 - 1, j_lo))
+        j_hi = max(0, min(n2 - 1, j_hi))
+
+        if i_hi < i_lo or j_hi < j_lo:
+            return []
+
+        return [(ii, jj) for ii in range(i_lo, i_hi + 1) for jj in range(j_lo, j_hi + 1)]
+
+    # Helper: convex polygon intersection via Separating Axis Theorem (SAT)
+    def _poly_intersects_poly(poly_a, poly_b, tol=1e-12):
+        poly_a = np.asarray(poly_a, dtype=float)
+        poly_b = np.asarray(poly_b, dtype=float)
+
+        def _edges(poly):
+            return poly[(np.arange(len(poly)) + 1) % len(poly)] - poly
+
+        def _axes_from_edges(edges):
+            # Perpendicular normals for each edge
+            return np.column_stack([-edges[:, 1], edges[:, 0]])
+
+        def _project(poly, axis):
+            axis = np.asarray(axis, dtype=float)
+            norm = np.linalg.norm(axis)
+            if norm < tol:
+                return None
+            axis = axis / norm
+            dots = poly @ axis
+            return float(dots.min()), float(dots.max())
+
+        axes = np.vstack([
+            _axes_from_edges(_edges(poly_a)),
+            _axes_from_edges(_edges(poly_b)),
+        ])
+
+        for axis in axes:
+            pa = _project(poly_a, axis)
+            pb = _project(poly_b, axis)
+            if pa is None or pb is None:
+                continue
+            a_min, a_max = pa
+            b_min, b_max = pb
+            if a_max < b_min - tol or b_max < a_min - tol:
+                return False
+        return True
+
+    # Helper: parallelogram (x-space) intersects x-rectangle cell (axis-aligned)
+    def _parallelogram_intersects_cell(par_verts, cell_i, cell_j):
+        x1_lo, x1_hi = x1_vals[cell_i], x1_vals[cell_i + 1]
+        x2_lo, x2_hi = x2_vals[cell_j], x2_vals[cell_j + 1]
+        rect = np.array([
+            [x1_lo, x2_lo],
+            [x1_lo, x2_hi],
+            [x1_hi, x2_hi],
+            [x1_hi, x2_lo],
+        ], dtype=float)
+        return _poly_intersects_poly(par_verts, rect)
+
+    ground_truth_check = {}
+
+    for i in range(nstates_1):
+        y1_lo, y1_hi = y1_params[i], y1_params[i + 1]
+        for j in range(nstates_2):
+            y2_lo, y2_hi = y2_params[j], y2_params[j + 1]
+
+            # y-cell corners (axis-aligned in y-space)
+            y_corners = np.array([
+                [y1_lo, y2_lo],
+                [y1_lo, y2_hi],
+                [y1_hi, y2_hi],
+                [y1_hi, y2_lo],
+            ], dtype=float)
+
+            # Map to x-space: x = M y (affine cell becomes a parallelogram in x)
+            x_par = (M @ y_corners.T).T
+
+            src = cell_state_id(i, j)
+
+            # If any vertex is outside the x-domain, conservatively mark as fail
+            if np.any(x_par[:, 0] < x1_min) or np.any(x_par[:, 0] > x1_max) or np.any(x_par[:, 1] < x2_min) or np.any(x_par[:, 1] > x2_max):
+                ground_truth_check[src] = 'fail'
+                continue
+
+            # Candidate fixed cells from AABB over-approx
+            x1_min_aabb, x1_max_aabb = float(x_par[:, 0].min()), float(x_par[:, 0].max())
+            x2_min_aabb, x2_max_aabb = float(x_par[:, 1].min()), float(x_par[:, 1].max())
+            candidates = _intersecting_fixed_cells_from_x_aabb(x1_min_aabb, x1_max_aabb, x2_min_aabb, x2_max_aabb)
+
+            if not candidates:
+                ground_truth_check[src] = 'unk'
+                continue
+
+            # Check actual intersections and aggregate labels
+            seen_fail = False
+            seen_unk = False
+            seen_goal = False
+
+            for (ii, jj) in candidates:
+                if not _parallelogram_intersects_cell(x_par, ii, jj):
+                    continue
+                lab = fixed_check.get((ii, jj), 'unk')
+                if lab == 'fail':
+                    seen_fail = True
+                    break
+                if lab == 'unk':
+                    seen_unk = True
+                elif lab == 'goal':
+                    seen_goal = True
+
+            if seen_fail:
+                ground_truth_check[src] = 'fail'
+            elif seen_unk:
+                ground_truth_check[src] = 'unk'
+            else:
+                # If it intersects only goal-labeled fixed cells, declare goal. If it
+                # didn't intersect anything due to numerical edge cases, keep unk.
+                ground_truth_check[src] = 'goal' if seen_goal else 'unk'
+
+    return ground_truth_check
+
 
 
 def check_ground_truth(y1_params, y2_params, M):
@@ -237,7 +436,7 @@ def check_ground_truth(y1_params, y2_params, M):
             for _ in range(max_steps):
 
                 if is_goal_state(x_verts):
-                    print(f"Cell ({i},{j}): all goal reached")
+                    # print(f"Cell ({i},{j}): all goal reached")
                     ground_truth_check[src] = 'goal'
                     reached_terminal = True
                     break

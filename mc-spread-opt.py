@@ -1,80 +1,69 @@
 # Libraries
 import numpy as np
-import grid_plot_tools as gpt
-from mc_spread_objective_tools import extract_grid_params, trans_matrix
+import mc_grid_plot_tools as gpt
+from mc_spread_objective_tools import extract_grid_params, trans_matrix, diff_successor_count_objective
 from mc_model_checking_tools import make_kripke_from_params, model_check_kripke, check_ground_truth, false_negative_rate
 import jax
 import jax.numpy as jnp
 from typing import Optional, Union
-from mc_spread_objective_tools import mc_cl_dynamics
 
 
-# def gradient_descent_optimize(
-#     params_init: jnp.ndarray,
-#     objective_fn,
-#     objective_kwargs: dict,
-#     steps: int,
-#     *,
-#     lr: Union[float, jnp.ndarray] = 1e-2,
-#     clip: Optional[float] = None,
-#     print_every: int = 100,
-#     project_theta: bool = True,
-# ):
-#     """Basic gradient descent loop for a flat params vector.
+def gradient_descent_optimize(
+    params_init: jnp.ndarray,
+    objective_fn,
+    objective_kwargs: dict,
+    steps: int,
+    *,
+    lr: Union[float, jnp.ndarray] = 1e-2,
+    clip: Optional[float] = None,
+    print_every: int = 100,
+    project_theta: bool = True,
+):
+    """Basic gradient descent loop for a flat params vector (JAX)."""
+    value_and_grad_fn = jax.value_and_grad(objective_fn)
 
-#     - Uses JAX `value_and_grad` for gradients.
-#     - Optional elementwise gradient clipping.
-#     - Optional projection of the last 4 params (theta,a1,a2,h) to keep theta wrapped.
-#     """
+    @jax.jit
+    def step(params: jnp.ndarray, step_lr: jnp.ndarray):
+        val, grad = value_and_grad_fn(params, **objective_kwargs)
+        if clip is not None:
+            grad = jnp.clip(grad, -clip, clip)
+        new_params = params - step_lr * grad
 
-#     value_and_grad_fn = jax.value_and_grad(objective_fn)
+        if project_theta:
+            theta = new_params[-4]
+            theta = (theta + jnp.pi) % (2 * jnp.pi) - jnp.pi
+            new_params = new_params.at[-4].set(theta)
 
-#     @jax.jit
-#     def step(params: jnp.ndarray, step_lr: jnp.ndarray):
-#         val, grad = value_and_grad_fn(params, **objective_kwargs)
-#         if clip is not None:
-#             grad = jnp.clip(grad, -clip, clip)
-#         # `step_lr` can be a scalar () or a vector (params.shape)
-#         new_params = params - step_lr * grad
+        return new_params, val, grad
 
-#         if project_theta:
-#             # params layout: [u1 (n1), u2 (n2), theta, a1, a2, h]
-#             theta = new_params[-4]
-#             theta = (theta + jnp.pi) % (2 * jnp.pi) - jnp.pi
-#             new_params = new_params.at[-4].set(theta)
+    params = params_init
+    if isinstance(lr, (int, float)):
+        lr_arr = jnp.asarray(lr, dtype=params.dtype)
+    else:
+        lr_arr = jnp.asarray(lr, dtype=params.dtype)
+        if lr_arr.shape != params.shape:
+            raise ValueError(f"per-parameter lr must have shape {params.shape}, got {lr_arr.shape}")
 
-#         return new_params, val, grad
+    last_val = None
+    for k in range(steps):
+        params, val, grad = step(params, lr_arr)
+        last_val = val
 
-#     params = params_init
+        if (k % print_every) == 0 or k == steps - 1:
+            grad_norm = jnp.linalg.norm(grad)
+            if lr_arr.shape == ():
+                lr_msg = f"lr={float(lr_arr):.2e}"
+            else:
+                n_last = 4
+                step_u_max = float(jnp.max(jnp.abs(lr_arr[:-n_last] * grad[:-n_last])))
+                step_last_max = float(jnp.max(jnp.abs(lr_arr[-n_last:] * grad[-n_last:])))
+                lr_msg = f"lr_u~{float(jnp.max(lr_arr[:-n_last])):.2e} lr_last4={list(map(float, lr_arr[-n_last:]))}  step_u_max={step_u_max:.2e} step_last4_max={step_last_max:.2e}"
 
-#     # Allow scalar lr or per-parameter lr vector.
-#     if isinstance(lr, (int, float)):
-#         lr_arr = jnp.asarray(lr, dtype=params.dtype)
-#     else:
-#         lr_arr = jnp.asarray(lr, dtype=params.dtype)
-#         if lr_arr.shape != params.shape:
-#             raise ValueError(f"per-parameter lr must have shape {params.shape}, got {lr_arr.shape}")
-#     last_val = None
+            print(
+                f"step={k:5d}  obj={float(val): .6e}  grad_norm={float(grad_norm): .6e}  {lr_msg}"
+            )
 
-#     for k in range(steps):
-#         params, val, grad = step(params, lr_arr)
-#         last_val = val
-
-#         if (k % print_every) == 0 or k == steps - 1:
-#             grad_norm = jnp.linalg.norm(grad)
-#             if lr_arr.shape == ():
-#                 lr_msg = f"lr={float(lr_arr):.2e}"
-#             else:
-#                 # Handy diagnostics: typical step sizes by block
-#                 n_last = 4
-#                 step_u_max = float(jnp.max(jnp.abs(lr_arr[:-n_last] * grad[:-n_last])))
-#                 step_last_max = float(jnp.max(jnp.abs(lr_arr[-n_last:] * grad[-n_last:])))
-#                 lr_msg = f"lr_u~{float(jnp.max(lr_arr[:-n_last])):.2e} lr_last4={list(map(float, lr_arr[-n_last:]))}  step_u_max={step_u_max:.2e} step_last4_max={step_last_max:.2e}"
-
-#             print(f"step={k:5d}  obj={float(val): .6e}  grad_norm={float(grad_norm): .6e}  {lr_msg}")
-
-#     return params, last_val
-
+    return params, last_val
 
 
 if __name__ == "__main__":
@@ -85,24 +74,34 @@ if __name__ == "__main__":
     x_domain = (x1_min, x1_max, x2_min, x2_max)
 
     # Initial tessellation parameters
-    n1_internal = 80
-    n2_internal = 80
+    n1_internal = 100
+    n2_internal = 100
     key = jax.random.PRNGKey(0)
-    u1 = jnp.zeros((n1_internal,))  # initial uniform spacing
-    u2 = jnp.zeros((n2_internal,))
-    theta = 0  # -jnp.pi/4
-    a1, a2 = 0.0, 0.0
-    h = 0.0
+
+    # Random init (helps break symmetry)
+    use_random_init = False
+    sigma_u = 0.05
+    sigma_a = 0.05
+    sigma_h = 0.02
+
+    if use_random_init:
+        key, k_u1, k_u2, k_th, k_a1, k_a2, k_h = jax.random.split(key, 7)
+        u1 = sigma_u * jax.random.normal(k_u1, (n1_internal,))
+        u2 = sigma_u * jax.random.normal(k_u2, (n2_internal,))
+        theta = jax.random.uniform(k_th, (), minval=-jnp.pi, maxval=jnp.pi)
+        a1 = sigma_a * jax.random.normal(k_a1, ())
+        a2 = sigma_a * jax.random.normal(k_a2, ())
+        h = sigma_h * jax.random.normal(k_h, ())
+    else:
+        u1 = jnp.zeros((n1_internal,))  # initial uniform spacing
+        u2 = jnp.zeros((n2_internal,))
+        theta = 0.0
+        a1, a2 = 0.0, 0.0
+        h = 0.0
 
     params = jnp.concatenate([u1, u2, jnp.array([theta, a1, a2, h])])
 
-    M, y1_params, y2_params = extract_grid_params(
-    params,
-    n1_internal=n1_internal, n2_internal=n2_internal,
-    x1_min=x1_min, x1_max=x1_max, x2_min=x2_min, x2_max=x2_max,
-    min_gap=0.0)
-
-    # Compute y-domain bounds from x-domain and transformation
+    # Compute y-domain bounds from x-domain and initial transformation
     M = np.array(trans_matrix(theta, a1, a2, h))
     bounds_y, verts_y = gpt.get_yspace_bounds(
         M,
@@ -112,34 +111,92 @@ if __name__ == "__main__":
     y1_lo, y1_hi = bounds_y["y1"][0], bounds_y["y1"][1]
     y2_lo, y2_hi = bounds_y["y2"][0], bounds_y["y2"][1]
 
+    # # -----------------
+    # # Optimize grid
+    # # -----------------
+    # obj_kwargs = dict(
+    #     y1_lo=y1_lo,
+    #     y1_hi=y1_hi,
+    #     y2_lo=y2_lo,
+    #     y2_hi=y2_hi,
+    #     n1_internal=n1_internal,
+    #     n2_internal=n2_internal,
+    #     min_gap=0.0,
+    #     temperature=0.10,          # closer to greedy while still smooth
+    #     horizon=1,
+    #     tau_bbox=0.02,
+    #     beta_overlap=200.0,
+    #     weight_mode="uniform",
+    # )
 
-    y1_params_ends = np.concatenate(([y1_lo], np.array(y1_params), [y1_hi]))
-    y2_params_ends = np.concatenate(([y2_lo], np.array(y2_params), [y2_hi]))
+    # val0, grad0 = jax.value_and_grad(diff_successor_count_objective)(params, **obj_kwargs)
+    # print("init obj:", float(val0))
+    # print("init grad norm:", float(jnp.linalg.norm(grad0)))
+
+    # lr_vec = jnp.concatenate(
+    #     [
+    #         5e-3 * jnp.ones_like(u1),
+    #         5e-3 * jnp.ones_like(u2),
+    #         # Freeze transform params for Option A (start by only tuning spacing)
+    #         jnp.array([0.0, 0.0, 0.0, 0.0]),
+    #     ]
+    # )
+
+    # params_opt, final_val = gradient_descent_optimize(
+    #     params,
+    #     diff_successor_count_objective,
+    #     obj_kwargs,
+    #     steps=10000,
+    #     lr=lr_vec,
+    #     clip=50.0,
+    #     print_every=500,
+    # )
+    # print("final obj:", float(final_val))
+
+    params_opt = params
+
+    # Extract optimized grid for plotting + model checking
+    M, y1_params, y2_params = extract_grid_params(
+        params_opt,
+        n1_internal=n1_internal,
+        n2_internal=n2_internal,
+        x1_min=x1_min,
+        x1_max=x1_max,
+        x2_min=x2_min,
+        x2_max=x2_max,
+        min_gap=0.0,
+    )
+
+
+    # y1_params/y2_params from extract_grid_params already include endpoints
+    y1_params_ends = np.array(y1_params)
+    y2_params_ends = np.array(y2_params)
+
+    
+    kripke_structure = make_kripke_from_params(y1_params_ends, y2_params_ends, M)
+    # print(kripke_structure)
 
     ground_truth_check = check_ground_truth(y1_params_ends, y2_params_ends, M)
     
-    kripke_structure = make_kripke_from_params(y1_params_ends, y2_params_ends, M)
-    print(kripke_structure)
-    
     sat_init_states = model_check_kripke(kripke_structure)
-    print(sat_init_states)
+    # print(sat_init_states)
 
     checked_safe_states = set(sat_init_states)
     true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
     fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
     print(f"False Negative Rate (FNR): {fnr:.4f}")
-    # gpt.grid_plotter(M, y1_params, y2_params, x1_min, x1_max, x2_min, x2_max)
 
-    # gpt.plot_x_grid_false_negative_map(
-    #     M,
-    #     y1_params_ends,
-    #     y2_params_ends,
-    #     sat=sat_init_states,
-    #     false_negative_states=false_negative_states,
-    #     x_domain=x_domain,
-    #     x_star=x_star,
-    #     radius=radius,
-    # )
+    # Plot optimized grid
+    # gpt.grid_plotter(M, y1_params_ends, y2_params_ends, x1_min, x1_max, x2_min, x2_max)
+
+    gpt.plot_x_grid_false_negative_map(
+        M,
+        y1_params_ends,
+        y2_params_ends,
+        sat=sat_init_states,
+        false_negative_states=false_negative_states,
+        x_domain=x_domain
+    )
 
 
 
