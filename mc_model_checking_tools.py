@@ -213,7 +213,7 @@ def fixed_check_ground_truth(x_domain, x_star, radius, y1_params, y2_params, M, 
     x1_vals = np.linspace(x1_min, x1_max, grid_resolution)
     x2_vals = np.linspace(x2_min, x2_max, grid_resolution)
 
-    # Iterate through each grid cell; classify as 'fail', 'goal', or 'unk'
+    # Iterate through each grid cell; classify as 'goal' or 'unk'
     fixed_check = {}
     for i in range(grid_resolution - 1):
         for j in range(grid_resolution - 1):
@@ -229,21 +229,10 @@ def fixed_check_ground_truth(x_domain, x_star, radius, y1_params, y2_params, M, 
             
             # Push vertices through dynamics until any fail or all succeed
             max_steps = 10_000
-            any_oob = False
-            all_goal = False
             reached_terminal = False
             for _ in range(max_steps):
-                any_oob = any(
-                    (v[0] < x1_min) or (v[0] > x1_max) or (v[1] < x2_min) or (v[1] > x2_max)
-                    for v in corners
-                )
-                if any_oob:
-                    fixed_check[(i, j)] = 'fail'
-                    reached_terminal = True
-                    break
 
-                all_goal = all(np.linalg.norm(v - x_star) <= radius for v in corners)
-                if all_goal:
+                if is_goal_state(corners):
                     fixed_check[(i, j)] = 'goal'
                     reached_terminal = True
                     break
@@ -357,10 +346,10 @@ def fixed_check_ground_truth(x_domain, x_star, radius, y1_params, y2_params, M, 
 
             src = cell_state_id(i, j)
 
-            # If any vertex is outside the x-domain, conservatively mark as fail
-            if np.any(x_par[:, 0] < x1_min) or np.any(x_par[:, 0] > x1_max) or np.any(x_par[:, 1] < x2_min) or np.any(x_par[:, 1] > x2_max):
-                ground_truth_check[src] = 'fail'
-                continue
+            # # If any vertex is outside the x-domain, conservatively mark as fail
+            # if np.any(x_par[:, 0] < x1_min) or np.any(x_par[:, 0] > x1_max) or np.any(x_par[:, 1] < x2_min) or np.any(x_par[:, 1] > x2_max):
+            #     ground_truth_check[src] = 'fail'
+            #     continue
 
             # Candidate fixed cells from AABB over-approx
             x1_min_aabb, x1_max_aabb = float(x_par[:, 0].min()), float(x_par[:, 0].max())
