@@ -1,7 +1,7 @@
 # Libraries
 import numpy as np
 import grid_plot_tools as gpt
-from model_checking_tools import make_kripke_from_params, model_check_kripke, check_ground_truth, false_negative_rate
+from model_checking_tools import make_kripke_from_params, model_check_kripke, check_ground_truth, false_negative_rate, fixed_check_ground_truth
 
 if __name__ == "__main__":
 
@@ -37,16 +37,17 @@ if __name__ == "__main__":
     y1_params_ends = np.linspace(y1_lo, y1_hi, n1_internal + 2) # include boundaries
     y2_params_ends = np.linspace(y2_lo, y2_hi, n2_internal + 2) #
 
-    ground_truth_check = check_ground_truth(x_domain, x_star, radius,
-                                            y1_params_ends, y2_params_ends, M)
+    ground_truth_check = fixed_check_ground_truth(x_domain, x_star, radius,
+                                            y1_params_ends, y2_params_ends, M,
+                                            grid_resolution=10)
     # print(ground_truth_check)
 
     kripke_structure = make_kripke_from_params(x_domain, x_star, radius,
                                                y1_params_ends, y2_params_ends, M)
     sat_init_states = model_check_kripke(kripke_structure)
-    # print(sat_init_states)
+    # # print(sat_init_states)
 
-    # Compute false negative rate
+    # # Compute false negative rate
     checked_safe_states = set(sat_init_states)
     true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
     fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
