@@ -4,6 +4,7 @@ import pyModelChecking as pmc
 import grid_plot_tools as gpt
 import pyModelChecking.CTL as CTL
 from pyModelChecking.CTL import A, E, G, F, Imply
+import time
 
 def dynamics(state):
     A = np.array([[0.8, -0.3],
@@ -166,8 +167,12 @@ def make_kripke_from_params(x_domain, x_star, radius, y1_params, y2_params, M):
 
 def model_check_kripke(kripke_structure):
 
+    start_cpu = time.process_time()
     phi = 'A (safe U goal)'  # Eventually reach goal
     sat = CTL.modelcheck(kripke_structure, phi)
+    end_cpu = time.process_time()
+    cpu_time = end_cpu - start_cpu
+    print(f"Model checking CPU time (s): {cpu_time:.2f}")
     
     return sat
 
