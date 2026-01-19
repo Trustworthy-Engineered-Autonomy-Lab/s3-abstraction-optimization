@@ -2,11 +2,11 @@
 import numpy as np
 import mc_grid_plot_tools as gpt
 from mc_spread_objective_tools import extract_grid_params, trans_matrix, diff_successor_count_objective
-from mc_model_checking_tools import make_kripke_from_params, model_check_kripke, check_ground_truth, false_negative_rate
+from mc_model_checking_tools import make_kripke_from_params, model_check_kripke, fixed_check_ground_truth, false_negative_rate
 import jax
 import jax.numpy as jnp
 from typing import Optional, Union
-
+import time
 
 def gradient_descent_optimize(
     params_init: jnp.ndarray,
@@ -67,6 +67,8 @@ def gradient_descent_optimize(
 
 
 if __name__ == "__main__":
+
+    start_cpu = time.process_time()
     
     # Define the X-domain
     x1_min, x1_max = -1.2, 0.6
@@ -74,8 +76,8 @@ if __name__ == "__main__":
     x_domain = (x1_min, x1_max, x2_min, x2_max)
 
     # Initial tessellation parameters
-    n1_internal = 100
-    n2_internal = 100
+    n1_internal = 80
+    n2_internal = 80
     key = jax.random.PRNGKey(0)
 
     # Random init (helps break symmetry)
@@ -88,19 +90,55 @@ if __name__ == "__main__":
         key, k_u1, k_u2, k_th, k_a1, k_a2, k_h = jax.random.split(key, 7)
         u1 = sigma_u * jax.random.normal(k_u1, (n1_internal,))
         u2 = sigma_u * jax.random.normal(k_u2, (n2_internal,))
-        theta = jax.random.uniform(k_th, (), minval=-jnp.pi, maxval=jnp.pi)
-        a1 = sigma_a * jax.random.normal(k_a1, ())
-        a2 = sigma_a * jax.random.normal(k_a2, ())
-        h = sigma_h * jax.random.normal(k_h, ())
+        theta = 0.0 #jax.random.uniform(k_th, (), minval=-jnp.pi, maxval=jnp.pi)
+        a1 = 0.0 # sigma_a * jax.random.normal(k_a1, ())
+        a2 = 0.0 # sigma_a * jax.random.normal(k_a2, ())
+        h = 0.0 # sigma_h * jax.random.normal(k_h, ())
     else:
         u1 = jnp.zeros((n1_internal,))  # initial uniform spacing
         u2 = jnp.zeros((n2_internal,))
-        theta = 0.0
+        theta = 0 # -jnp.pi / 4
         a1, a2 = 0.0, 0.0
         h = 0.0
 
     params = jnp.concatenate([u1, u2, jnp.array([theta, a1, a2, h])])
 
+
+
+
+    # # Initial model checking results
+    # M, y1_params, y2_params = extract_grid_params(
+    #     params,
+    #     n1_internal=n1_internal,
+    #     n2_internal=n2_internal,
+    #     x1_min=x1_min,
+    #     x1_max=x1_max,
+    #     x2_min=x2_min,
+    #     x2_max=x2_max,
+    #     min_gap=0.0,
+    # )
+    # y1_params_ends = np.array(y1_params)
+    # y2_params_ends = np.array(y2_params)
+    # gpt.grid_plotter(M, y1_params_ends, y2_params_ends, x1_min, x1_max, x2_min, x2_max)
+    # kripke_structure = make_kripke_from_params(y1_params_ends, y2_params_ends, M)
+    # ground_truth_check = fixed_check_ground_truth(x_domain, y1_params_ends, y2_params_ends, M, grid_resolution=10)
+    # sat_init_states = model_check_kripke(kripke_structure)
+    # checked_safe_states = set(sat_init_states)
+    # true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
+    # fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
+    # print(f"False Negative Rate (FNR): {fnr:.4f}")
+    # gpt.plot_x_grid_false_negative_map(
+    #     M,
+    #     y1_params_ends,
+    #     y2_params_ends,
+    #     sat=sat_init_states,
+    #     false_negative_states=false_negative_states,
+    #     x_domain=x_domain)
+
+
+
+
+    
     # Compute y-domain bounds from x-domain and initial transformation
     M = np.array(trans_matrix(theta, a1, a2, h))
     bounds_y, verts_y = gpt.get_yspace_bounds(
@@ -111,49 +149,48 @@ if __name__ == "__main__":
     y1_lo, y1_hi = bounds_y["y1"][0], bounds_y["y1"][1]
     y2_lo, y2_hi = bounds_y["y2"][0], bounds_y["y2"][1]
 
-    # # -----------------
-    # # Optimize grid
-    # # -----------------
-    # obj_kwargs = dict(
-    #     y1_lo=y1_lo,
-    #     y1_hi=y1_hi,
-    #     y2_lo=y2_lo,
-    #     y2_hi=y2_hi,
-    #     n1_internal=n1_internal,
-    #     n2_internal=n2_internal,
-    #     min_gap=0.0,
-    #     temperature=0.10,          # closer to greedy while still smooth
-    #     horizon=1,
-    #     tau_bbox=0.02,
-    #     beta_overlap=200.0,
-    #     weight_mode="uniform",
-    # )
+    # -----------------
+    # Optimize grid
+    # -----------------
+    obj_kwargs = dict(
+        y1_lo=y1_lo,
+        y1_hi=y1_hi,
+        y2_lo=y2_lo,
+        y2_hi=y2_hi,
+        n1_internal=n1_internal,
+        n2_internal=n2_internal,
+        min_gap=0.0,
+        temperature=0.10,          # closer to greedy while still smooth
+        horizon=1,
+        tau_bbox=0.02,
+        beta_overlap=200.0,
+        weight_mode="uniform",
+    )
 
-    # val0, grad0 = jax.value_and_grad(diff_successor_count_objective)(params, **obj_kwargs)
-    # print("init obj:", float(val0))
-    # print("init grad norm:", float(jnp.linalg.norm(grad0)))
+    val0, grad0 = jax.value_and_grad(diff_successor_count_objective)(params, **obj_kwargs)
+    print("init obj:", float(val0))
+    print("init grad norm:", float(jnp.linalg.norm(grad0)))
 
-    # lr_vec = jnp.concatenate(
-    #     [
-    #         5e-3 * jnp.ones_like(u1),
-    #         5e-3 * jnp.ones_like(u2),
-    #         # Freeze transform params for Option A (start by only tuning spacing)
-    #         jnp.array([0.0, 0.0, 0.0, 0.0]),
-    #     ]
-    # )
+    lr_vec = jnp.concatenate(
+        [
+            1e-4 * jnp.ones_like(u1),
+            1e-4 * jnp.ones_like(u2),
+            jnp.array([0.0, 0.0, 0.0, 0.0]),
+        ]
+    )
 
-    # params_opt, final_val = gradient_descent_optimize(
-    #     params,
-    #     diff_successor_count_objective,
-    #     obj_kwargs,
-    #     steps=10000,
-    #     lr=lr_vec,
-    #     clip=50.0,
-    #     print_every=500,
-    # )
-    # print("final obj:", float(final_val))
+    params_opt, final_val = gradient_descent_optimize(
+        params,
+        diff_successor_count_objective,
+        obj_kwargs,
+        steps=10000,
+        lr=lr_vec,
+        clip=50.0,
+        print_every=500,
+    )
+    print("final obj:", float(final_val))
 
-    params_opt = params
+    # params_opt = params
 
     # Extract optimized grid for plotting + model checking
     M, y1_params, y2_params = extract_grid_params(
@@ -172,11 +209,17 @@ if __name__ == "__main__":
     y1_params_ends = np.array(y1_params)
     y2_params_ends = np.array(y2_params)
 
-    
+    # gpt.grid_plotter(M, y1_params_ends, y2_params_ends, x1_min, x1_max, x2_min, x2_max)
+
+
     kripke_structure = make_kripke_from_params(y1_params_ends, y2_params_ends, M)
     # print(kripke_structure)
 
-    ground_truth_check = check_ground_truth(y1_params_ends, y2_params_ends, M)
+    end_cpu = time.process_time()
+    cpu_time = end_cpu - start_cpu
+    print(f"Building CPU time (s): {cpu_time:.2f}")
+
+    ground_truth_check = fixed_check_ground_truth(x_domain, y1_params_ends, y2_params_ends, M, grid_resolution=10)
     
     sat_init_states = model_check_kripke(kripke_structure)
     # print(sat_init_states)
@@ -186,8 +229,12 @@ if __name__ == "__main__":
     fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
     print(f"False Negative Rate (FNR): {fnr:.4f}")
 
-    # Plot optimized grid
-    # gpt.grid_plotter(M, y1_params_ends, y2_params_ends, x1_min, x1_max, x2_min, x2_max)
+
+    true_negative_states = {s for s, v in ground_truth_check.items() if v == 'unk' or v == 'fail'}
+    num_true_negatives = len(true_negative_states)
+    true_negative_prop = num_true_negatives / len(ground_truth_check)
+    print(f"Proportion of True Negative States: {true_negative_prop:.4f}")
+
 
     gpt.plot_x_grid_false_negative_map(
         M,
@@ -195,9 +242,8 @@ if __name__ == "__main__":
         y2_params_ends,
         sat=sat_init_states,
         false_negative_states=false_negative_states,
-        x_domain=x_domain
-    )
-
+        x_domain=x_domain)
+    
 
 
 

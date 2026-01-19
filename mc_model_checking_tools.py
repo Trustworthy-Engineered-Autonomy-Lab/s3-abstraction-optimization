@@ -7,6 +7,7 @@ from pyModelChecking.CTL import A, E, G, F, Imply
 import torch
 import torch.nn as nn
 from pathlib import Path
+import time
 
 
 # MountainCar open-loop dynamics
@@ -146,6 +147,7 @@ def make_kripke_from_params(y1_params, y2_params, M):
     invM = np.linalg.inv(M)
 
     # Loop through each abstract state
+    count = 0
     for i in range(nstates_1):
         y1_lo, y1_hi = y1_params[i], y1_params[i+1]
         for j in range(nstates_2):
@@ -180,7 +182,11 @@ def make_kripke_from_params(y1_params, y2_params, M):
                 kripke_transitions.add((src, src))
 
             kripke_labels[src] = label
+
+            # if count % 1000 == 0:
+                # print(f"Processed {count} / {n_kripke_states} Kripke states...")
             # print(f"{src}: {label[0]} cell ({i},{j}) -> {len(succ_cells)} in-grid successors" + (" + OOB" if hits_oob else ""))
+            count += 1
 
     # Define initial states (in bounds, non-goal states)
     initial_states = [s for s in kripke_states]
@@ -194,20 +200,26 @@ def make_kripke_from_params(y1_params, y2_params, M):
     return kripke_structure
 
 
+
+
 def model_check_kripke(kripke_structure):
 
+    start_cpu = time.process_time()
+    print("Starting model checking...")
     phi = 'A (F goal)'  # Eventually reach goal
     sat = CTL.modelcheck(kripke_structure, phi)
+    end_cpu = time.process_time()
+    cpu_time = end_cpu - start_cpu
+    print(f"Model checking CPU time (s): {cpu_time:.2f}")
     
     return sat
 
 
 
-def fixed_check_ground_truth(x_domain, x_star, radius, y1_params, y2_params, M, grid_resolution=100):
+def fixed_check_ground_truth(x_domain, y1_params, y2_params, M, grid_resolution=100):
 
     # Unpack domain parameters
     x1_min, x1_max, x2_min, x2_max = map(float, x_domain)
-    x_star = np.asarray(x_star, dtype=float)
 
     # Initialize a uniform grid over the x-domain
     x1_vals = np.linspace(x1_min, x1_max, grid_resolution)
@@ -235,12 +247,14 @@ def fixed_check_ground_truth(x_domain, x_star, radius, y1_params, y2_params, M, 
                 if is_goal_state(corners):
                     fixed_check[(i, j)] = 'goal'
                     reached_terminal = True
+                    # print(f"Fixed cell ({i},{j}): all goal reached")
                     break
 
                 corners = np.array([mc_cl_dynamics(v) for v in corners])
 
             if not reached_terminal:
                 fixed_check[(i, j)] = 'unk'
+                # print(f"Fixed cell ({i},{j}): unknown")
 
     # --- Now classify the user's affine (y-grid) cells using the fixed x-grid labels ---
     nstates_1 = len(y1_params) - 1
@@ -379,12 +393,15 @@ def fixed_check_ground_truth(x_domain, x_star, radius, y1_params, y2_params, M, 
 
             if seen_fail:
                 ground_truth_check[src] = 'fail'
+                print(f"Cell ({i},{j}): some fail reached")
             elif seen_unk:
                 ground_truth_check[src] = 'unk'
+                print(f"Cell ({i},{j}): some unk reached")
             else:
                 # If it intersects only goal-labeled fixed cells, declare goal. If it
                 # didn't intersect anything due to numerical edge cases, keep unk.
                 ground_truth_check[src] = 'goal' if seen_goal else 'unk'
+                # print(f"Cell ({i},{j}): all goal reached")
 
     return ground_truth_check
 

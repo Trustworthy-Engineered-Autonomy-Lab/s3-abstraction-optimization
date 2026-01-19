@@ -362,9 +362,6 @@ def mc_cl_dynamics(x):
     return mc_ol_dynamics(x_np, a_idx)
 
 
-
-
-
 def make_lines_from_gaps(u, lo, hi, min_gap=0.0):
     """
     u: (n_internal,) unconstrained

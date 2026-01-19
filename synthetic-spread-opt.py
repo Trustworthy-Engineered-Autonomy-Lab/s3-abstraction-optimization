@@ -1,11 +1,17 @@
 # Libraries
 import numpy as np
-from grid_plot_tools import get_yspace_bounds, grid_plotter
-from spread_objective_tools import trans_matrix, diff_objective, extract_grid_params
-from model_checking_tools import make_kripke_from_params, model_check_kripke, check_ground_truth, false_negative_rate
+import grid_plot_tools as gpt
+from spread_objective_tools import (
+    trans_matrix,
+    diff_objective,
+    diff_successor_count_objective,
+    extract_grid_params,
+)
+from model_checking_tools import make_kripke_from_params, model_check_kripke, fixed_check_ground_truth, false_negative_rate
 import jax
 import jax.numpy as jnp
 from typing import Optional, Union
+import time
 
 CENTER = np.array([5.0, 5.0])
 
@@ -80,6 +86,8 @@ def gradient_descent_optimize(
 
 if __name__ == "__main__":
 
+    start_cpu = time.process_time()
+
     # Define the system transition matrix
     A = np.array([[0.8, -0.3],
                   [0.3,  0.8]])
@@ -92,13 +100,13 @@ if __name__ == "__main__":
     radius = 2.0
 
     # Initial tessellation parameters
-    n1_internal = 80
-    n2_internal = 80
+    n1_internal = 100
+    n2_internal = 100
     key = jax.random.PRNGKey(0)
 
     # Random initialization
     # u1/u2 are unconstrained; actual grid gaps come from softplus(u) then normalization.
-    use_random_init = True
+    use_random_init = False
     sigma_u = 0.05      # spacing log-gap noise; smaller => closer to uniform spacing
     sigma_a = 0.05      # scale log-params (a1/a2); s1,s2 = exp(a)
     sigma_h = 0.02      # shear
@@ -118,14 +126,14 @@ if __name__ == "__main__":
     else:
         u1 = jnp.zeros((n1_internal,))  # initial uniform spacing
         u2 = jnp.zeros((n2_internal,))
-        theta = 0  # -jnp.pi/4
+        theta = -jnp.pi/4
         a1, a2 = 0.0, 0.0
         h = 0.0
 
 
     # Compute y-domain bounds from x-domain and transformation
     M = np.array(trans_matrix(theta, a1, a2, h))
-    bounds_y, verts_y = get_yspace_bounds(
+    bounds_y, verts_y = gpt.get_yspace_bounds(
         M,
         x1_min, x1_max,
         x2_min, x2_max
@@ -136,17 +144,59 @@ if __name__ == "__main__":
 
     # Pack initial params; check initial objective + grad
     params = jnp.concatenate([u1, u2, jnp.array([theta, a1, a2, h])])
-    val, grad = jax.value_and_grad(diff_objective)(
+
+    # # Compute initial FNR
+    # M, y1_params, y2_params = extract_grid_params(
+    # params,
+    # n1_internal=n1_internal, n2_internal=n2_internal,
+    # x1_min=x1_min, x1_max=x1_max, x2_min=x2_min, x2_max=x2_max,
+    # min_gap=0.0)
+    # # gpt.grid_plotter(M, y1_params, y2_params, x1_min, x1_max, x2_min, x2_max)
+
+    # # run model checking on this tessellation
+    # y1_params_ends = np.concatenate(([y1_lo], np.array(y1_params), [y1_hi]))
+    # y2_params_ends = np.concatenate(([y2_lo], np.array(y2_params), [y2_hi]))
+    # ground_truth_check = fixed_check_ground_truth(x_domain, x_star, radius,
+    #                                         y1_params_ends, y2_params_ends, M)
+    # kripke_structure = make_kripke_from_params(x_domain, x_star, radius,
+    #                                            y1_params_ends, y2_params_ends, M)
+    # sat_init_states = model_check_kripke(kripke_structure)
+    # checked_safe_states = set(sat_init_states)
+    # true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
+    # fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
+    # print(f"False Negative Rate (FNR): {fnr:.4f}")
+
+    # gpt.plot_x_grid_false_negative_map(
+    #     M,
+    #     y1_params_ends,
+    #     y2_params_ends,
+    #     sat=sat_init_states,
+    #     false_negative_states=false_negative_states,
+    #     x_domain=x_domain,
+    #     x_star=x_star,
+    #     radius=radius,
+    # )
+
+
+
+
+
+
+    val, grad = jax.value_and_grad(diff_successor_count_objective)(
         params,
         A=A, center=CENTER,
         y1_lo=y1_lo, y1_hi=y1_hi, y2_lo=y2_lo, y2_hi=y2_hi,
+        x_domain=x_domain,
         n1_internal=n1_internal, n2_internal=n2_internal,
-        tau=0.05,
+        horizon=1,
+        tau_bbox=0.02,
+        beta_overlap=500.0,
+        lam_oob=10.0,
+        beta_oob=50.0,
         min_gap=0.0,
         weight_mode="cell_area_y",
         weight_power=1.0,
     )
-    print(grad)
 
     # Basic gradient descent training loop
     obj_kwargs = dict(
@@ -154,36 +204,77 @@ if __name__ == "__main__":
         center=jnp.asarray(CENTER),
         y1_lo=y1_lo, y1_hi=y1_hi,
         y2_lo=y2_lo, y2_hi=y2_hi,
+        x_domain=x_domain,
         n1_internal=n1_internal, n2_internal=n2_internal,
-        tau=0.05,
+        horizon=1,
+        tau_bbox=0.02,
+        beta_overlap=200.0,
+        lam_oob=10.0,
+        beta_oob=50.0,
         min_gap=0.0,
         weight_mode="cell_area_y",
-        weight_power=1.0,
-    )
+        weight_power=1.0)
     params_opt, final_val = gradient_descent_optimize(
         params,
-        diff_objective,
+        diff_successor_count_objective,
         obj_kwargs,
-        steps=10000,
+        steps=400,
         # Per-parameter learning rates: spacings (u1,u2) vs (theta,a1,a2,h)
         lr=jnp.concatenate(
             [
-                1e-1 * jnp.ones_like(u1),
-                1e-1 * jnp.ones_like(u2),
-                jnp.array([1e-2, 1e-3, 1e-3, 0]),
+                1e-3 * jnp.ones_like(u1),
+                1e-3 * jnp.ones_like(u2),
+                jnp.array([1e-3, 1e-3, 1e-3, 0.0]),
             ]
         ),
         clip=50.0,
-        print_every=500,
+        print_every=100,
     )
     print("Final objective:", float(final_val))
+
+    # params_opt = params
     
     M, y1_params, y2_params = extract_grid_params(
     params_opt,
     n1_internal=n1_internal, n2_internal=n2_internal,
     x1_min=x1_min, x1_max=x1_max, x2_min=x2_min, x2_max=x2_max,
     min_gap=0.0)
-    grid_plotter(M, y1_params, y2_params, x1_min, x1_max, x2_min, x2_max)
+    # gpt.grid_plotter(M, y1_params, y2_psarams, x1_min, x1_max, x2_min, x2_max)
+
+    # run model checking on this tessellation
+    y1_params_ends = np.concatenate(([y1_lo], np.array(y1_params), [y1_hi]))
+    y2_params_ends = np.concatenate(([y2_lo], np.array(y2_params), [y2_hi]))
+    ground_truth_check = fixed_check_ground_truth(x_domain, x_star, radius,
+                                            y1_params_ends, y2_params_ends, M)
+    kripke_structure = make_kripke_from_params(x_domain, x_star, radius,
+                                               y1_params_ends, y2_params_ends, M)
+    
+    end_cpu = time.process_time()
+    cpu_time = end_cpu - start_cpu
+    print(f"Building CPU time (s): {cpu_time:.2f}")
+
+    sat_init_states = model_check_kripke(kripke_structure)
+    checked_safe_states = set(sat_init_states)
+    true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
+    fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
+    print(f"False Negative Rate (FNR): {fnr:.4f}")
+
+    true_negative_states = {s for s, v in ground_truth_check.items() if v == 'unk' or v == 'fail'}
+    num_true_negatives = len(true_negative_states)
+    true_negative_prop = num_true_negatives / len(ground_truth_check)
+    print(f"Proportion of True Negative States: {true_negative_prop:.4f}")
+
+
+    gpt.plot_x_grid_false_negative_map(
+        M,
+        y1_params_ends,
+        y2_params_ends,
+        sat=sat_init_states,
+        false_negative_states=false_negative_states,
+        x_domain=x_domain,
+        x_star=x_star,
+        radius=radius,
+    )
 
     
     # # Optimization
@@ -218,17 +309,7 @@ if __name__ == "__main__":
     # n1_internal=n1_internal, n2_internal=n2_internal,
     # x1_min=x1_min, x1_max=x1_max, x2_min=x2_min, x2_max=x2_max,
     # min_gap=0.0)
-    # y1_params_ends = np.concatenate(([y1_lo], np.array(y1_params), [y1_hi]))
-    # y2_params_ends = np.concatenate(([y2_lo], np.array(y2_params), [y2_hi]))
-    # ground_truth_check = check_ground_truth(x_domain, x_star, radius,
-    #                                         y1_params_ends, y2_params_ends, M)
-    # kripke_structure = make_kripke_from_params(x_domain, x_star, radius,
-    #                                            y1_params_ends, y2_params_ends, M)
-    # sat_init_states = model_check_kripke(kripke_structure)
-    # checked_safe_states = set(sat_init_states)
-    # true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
-    # fnr, false_negative_states = false_negative_rate(true_safe_states, checked_safe_states)
-    # print(f"False Negative Rate (FNR): {fnr:.4f}")
+    
     # gpt.grid_plotter(M, y1_params, y2_params, x1_min, x1_max, x2_min, x2_max)
 
     # gpt.plot_x_grid_false_negative_map(

@@ -185,6 +185,163 @@ def softmax_tau(x, tau):
 def softmin_tau(x, tau):
     return -tau * jax.scipy.special.logsumexp(-x / tau, axis=-1)
 
+
+def _soft_overlap_count(
+    interval_min: jnp.ndarray,
+    interval_max: jnp.ndarray,
+    edges: jnp.ndarray,
+    *,
+    beta: float = 200.0,
+):
+    """Soft count of how many 1D bins [e_i,e_{i+1}] overlap [min,max].
+
+    Returns a value in [0, nbins] with gradients.
+    """
+    edges = jnp.asarray(edges)
+    left = edges[:-1]
+    right = edges[1:]
+
+    # overlap if right >= min and left <= max
+    s1 = jax.nn.sigmoid(beta * (right - interval_min))
+    s2 = jax.nn.sigmoid(beta * (interval_max - left))
+    return jnp.sum(s1 * s2)
+
+
+def diff_successor_count_objective(
+    params,
+    *,
+    A,
+    center,
+    y1_lo,
+    y1_hi,
+    y2_lo,
+    y2_hi,
+    x_domain=None,
+    x1_min=None,
+    x1_max=None,
+    x2_min=None,
+    x2_max=None,
+    n1_internal,
+    n2_internal,
+    min_gap=0.0,
+    horizon: int = 1,
+    tau_bbox: float = 0.02,
+    beta_overlap: float = 200.0,
+    lam_oob: float = 1.0,
+    beta_oob: float = 50.0,
+    weight_mode: str = "uniform",
+    weight_power: float = 1.0,
+):
+    """Differentiable proxy for successor count (synthetic affine dynamics).
+
+    Matches the successor computation used in the model checker:
+    - build y-cells from line params
+    - map corners to x via M
+    - propagate corners through x-dynamics for `horizon` steps
+    - map propagated corners back to y via inv(M)
+    - take y-space AABB over corners, count how many y-bins overlap it
+
+    Important notes
+    --------------
+    If you optimize the transform params (theta,a1,a2,h), the induced y-domain
+    changes with M. To keep the objective aligned with `extract_grid_params()`
+    and the model checker, you should pass `x_domain` (or x1_min/x1_max/x2_min/x2_max)
+    so the y-bounds are recomputed from M *inside* JAX.
+
+    The `lam_oob` term softly penalizes propagated corners leaving the x-domain.
+    Without it, the objective can be artificially reduced by driving successors
+    out-of-bounds.
+
+    Returns mean successor-count proxy over all cells (or area-weighted).
+    """
+    A = jnp.asarray(A)
+    center = jnp.asarray(center)
+
+    u1 = params[:n1_internal]
+    u2 = params[n1_internal : n1_internal + n2_internal]
+    theta, a1, a2, h = params[n1_internal + n2_internal :]
+
+    M = trans_matrix(theta, a1, a2, h)
+    invM = jnp.linalg.inv(M)
+
+    # Optionally recompute y-bounds from the x-domain (JAX-safe), matching
+    # grid_plot_tools.get_yspace_bounds: y = inv(M) x over x-rectangle corners.
+    if x_domain is not None:
+        x1_min, x1_max, x2_min, x2_max = x_domain
+    if (x1_min is not None) and (x1_max is not None) and (x2_min is not None) and (x2_max is not None):
+        corners_x = jnp.array(
+            [
+                [x1_min, x2_min],
+                [x1_min, x2_max],
+                [x1_max, x2_min],
+                [x1_max, x2_max],
+            ],
+            dtype=M.dtype,
+        )
+        verts_y = corners_x @ invM.T
+        y1_lo = jnp.min(verts_y[:, 0])
+        y1_hi = jnp.max(verts_y[:, 0])
+        y2_lo = jnp.min(verts_y[:, 1])
+        y2_hi = jnp.max(verts_y[:, 1])
+
+    y1 = make_lines_from_gaps(u1, y1_lo, y1_hi, min_gap=min_gap)
+    y2 = make_lines_from_gaps(u2, y2_lo, y2_hi, min_gap=min_gap)
+
+    y1a, y1b = y1[:-1], y1[1:]
+    y2a, y2b = y2[:-1], y2[1:]
+
+    Y00 = jnp.stack(jnp.meshgrid(y1a, y2a, indexing="ij"), axis=-1)
+    Y01 = jnp.stack(jnp.meshgrid(y1a, y2b, indexing="ij"), axis=-1)
+    Y11 = jnp.stack(jnp.meshgrid(y1b, y2b, indexing="ij"), axis=-1)
+    Y10 = jnp.stack(jnp.meshgrid(y1b, y2a, indexing="ij"), axis=-1)
+    Ycorn = jnp.stack([Y00, Y01, Y11, Y10], axis=2)  # (n1,n2,4,2)
+
+    # x = M y
+    Xcorn = Ycorn @ M.T
+
+    # propagate x-dynamics: center + A (x-center)
+    X = Xcorn.reshape(-1, 2)
+    for _ in range(int(horizon)):
+        X = center + (X - center) @ A.T
+    Xnext = X.reshape(Xcorn.shape)
+
+    # Soft out-of-bounds penalty in x-space.
+    # This prevents the objective from being minimized by leaving the domain.
+    oob_penalty = 0.0
+    if (x1_min is not None) and (x1_max is not None) and (x2_min is not None) and (x2_max is not None) and (lam_oob is not None) and (lam_oob != 0.0):
+        def soft_relu(z):
+            return jax.nn.softplus(beta_oob * z) / (beta_oob + 1e-12)
+
+        vx1 = soft_relu(x1_min - Xnext[..., 0]) + soft_relu(Xnext[..., 0] - x1_max)
+        vx2 = soft_relu(x2_min - Xnext[..., 1]) + soft_relu(Xnext[..., 1] - x2_max)
+        oob_penalty = lam_oob * jnp.mean(vx1 + vx2)
+
+    # map back to y: y = invM x
+    Ynext = Xnext @ invM.T  # (n1,n2,4,2)
+
+    # Soft bbox over corners (axis=2), per dimension.
+    # Move corners axis to the end so softmax_tau/softmin_tau reduce over corners.
+    Ynext_dim_last = jnp.moveaxis(Ynext, 2, -1)  # (n1,n2,2,4)
+    y_max = softmax_tau(Ynext_dim_last, tau_bbox)  # (n1,n2,2)
+    y_min = softmin_tau(Ynext_dim_last, tau_bbox)  # (n1,n2,2)
+
+    def cell_count(ymin: jnp.ndarray, ymax: jnp.ndarray):
+        c1 = _soft_overlap_count(ymin[0], ymax[0], y1, beta=beta_overlap)
+        c2 = _soft_overlap_count(ymin[1], ymax[1], y2, beta=beta_overlap)
+        return c1 * c2
+
+    counts = jax.vmap(jax.vmap(cell_count))(y_min, y_max)  # (n1,n2)
+
+    if weight_mode == "uniform":
+        return jnp.mean(counts) + oob_penalty
+
+    if weight_mode == "cell_area_y":
+        cell_area = (y1b - y1a)[:, None] * (y2b - y2a)[None, :]
+        weights = jnp.power(cell_area + 1e-12, weight_power)
+        return jnp.sum(weights * counts) / (jnp.sum(weights) + 1e-12) + oob_penalty
+
+    raise ValueError(f"Unknown weight_mode: {weight_mode}")
+
 def diff_objective(
     params,
     *,
