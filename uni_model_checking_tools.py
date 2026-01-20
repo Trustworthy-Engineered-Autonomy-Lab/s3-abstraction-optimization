@@ -440,10 +440,7 @@ def make_kripke_from_params(x_params, y_params, theta_params, allow_self_loops=T
     kripke_transitions.add((oob_state_id, oob_state_id))
 
     # Define initial states (in bounds, non-goal states)
-    initial_states = [
-        s for s in kripke_states
-        if s != oob_state_id#  and 'goal' not in kripke_labels[s]
-    ]
+    initial_states = [s for s in kripke_states if s != oob_state_id]
 
     # Output stats
     print(f"Average successors per state: {succ_count / (n_kripke_states - 1):.2f}")

@@ -6,10 +6,14 @@ import pyModelChecking.CTL as CTL
 from pyModelChecking.CTL import A, E, G, F, Imply
 import time
 
+
+XSTAR = np.array([5.0, 5.0])
+RADIUS = 2.0
+
 def dynamics(state):
     A = np.array([[0.8, -0.3],
                   [0.3,  0.8]])
-    x_star = np.array([5.0, 5.0])
+    x_star = XSTAR
     state = np.asarray(state, dtype=float)
     return (state - x_star) @ A.T + x_star
 
@@ -66,20 +70,35 @@ def point_in_parallelogram(p, verts, tol=1e-9):
 
 
 # Goal state labeling function
-def is_goal_state(x_space_vertices, x_star, radius):
+def is_goal_state(vertices):
+
+    x_star = XSTAR
+    radius = RADIUS
 
     # Return True iff all corners of the x-space cell are within the goal circle
-    for v in x_space_vertices:
+    for v in vertices:
         if np.linalg.norm(v - x_star) > radius:
             return False
     return True
 
+# Out-of-bounds state labeling function
+def is_oob_state(vertices, x_bounds, y_bounds):
 
-def make_kripke_from_params(x_domain, x_star, radius, y1_params, y2_params, M):
+    x_min, x_max = x_bounds
+    y_min, y_max = y_bounds
 
-    # Unpack domain parameters
-    x1_min, x1_max, x2_min, x2_max = x_domain
-    _, verts_y_domain = gpt.get_yspace_bounds(M, x1_min, x1_max, x2_min, x2_max)
+    # Return True iff any vertex is out of bounds
+    for v in vertices:
+        if (v[0] < x_min) or (v[0] > x_max) or (v[1] < y_min) or (v[1] > y_max):
+            return True
+    return False
+
+
+def make_kripke_from_params(y1_params, y2_params, M, allow_self_loops=True, advanced_metrics=False):
+
+    # # Unpack domain parameters
+    # x1_min, x1_max, x2_min, x2_max = x_domain
+    # _, verts_y_domain = gpt.get_yspace_bounds(M, x1_min, x1_max, x2_min, x2_max)
 
     # Initialize Kripke structure parameters
     nstates_1 = len(y1_params) - 1
@@ -100,7 +119,22 @@ def make_kripke_from_params(x_domain, x_star, radius, y1_params, y2_params, M):
     M = np.asarray(M, dtype=float)
     invM = np.linalg.inv(M)
 
+    # Determine cell area
+    if advanced_metrics:
+
+        # Cell area using average cell wall lengths
+        dy1 = np.mean(np.diff(y1_params))
+        dy2 = np.mean(np.diff(y2_params))
+        cell_area = dy1 * dy2
+
     # Loop through each abstract state
+    print("Labeling states and building transitions...")
+    count = 0
+    succ_count = 0
+    self_loop_count = 0
+    image_area = 0.0
+    displacement = 0.0
+    intersection_over_area = 0.0
     for i in range(nstates_1):
         y1_lo, y1_hi = y1_params[i], y1_params[i+1]
         for j in range(nstates_2):
@@ -117,46 +151,84 @@ def make_kripke_from_params(x_domain, x_star, radius, y1_params, y2_params, M):
             y_next = (invM @ x_next.T).T
 
             # Check label of current cell
-            label = ['goal'] if is_goal_state(
-                x_corners,
-                x_star=x_star,
-                radius=radius
-            ) else ['safe']
+            label = ['goal'] if is_goal_state(x_corners) else ['safe']
 
+            # Allocate image area if requested (approximated as AABB of image)
+            if advanced_metrics:
+
+                # Compute AABB area
+                x_min_img, x_max_img = float(x_next[:, 0].min()), float(x_next[:, 0].max())
+                y_min_img, y_max_img = float(x_next[:, 1].min()), float(x_next[:, 1].max())
+                img_area = (x_max_img - x_min_img) * (y_max_img - y_min_img)
+                image_area += img_area
+
+                # Compute average push distance of vertices
+                dists = np.linalg.norm(x_next - x_corners, axis=1)
+                displacement += np.mean(dists)
+
+                # Compute the proportion of the parent cell contained in the image AABB
+                y1_min_img, y1_max_img = float(y_next[:, 0].min()), float(y_next[:, 0].max())
+                y2_min_img, y2_max_img = float(y_next[:, 1].min()), float(y_next[:, 1].max())
+                overlap_y1 = max(0.0, min(y1_hi, y1_max_img) - max(y1_lo, y1_min_img))
+                overlap_y2 = max(0.0, min(y2_hi, y2_max_img) - max(y2_lo, y2_min_img))
+                parent_area = (y1_hi - y1_lo) * (y2_hi - y2_lo)
+                intersection_over_area += (overlap_y1 * overlap_y2) / parent_area if parent_area > 0.0 else 0.0
+            
             # Identify successor cells
             y1_min, y1_max = float(y_next[:, 0].min()), float(y_next[:, 0].max())
             y2_min, y2_max = float(y_next[:, 1].min()), float(y_next[:, 1].max())
             succ_cells = intersecting_cells_from_y_aabb(y1_params, y2_params, y1_min, y1_max, y2_min, y2_max)
 
             # Indicate if any successor goes out of bounds
-            hits_oob = any(not point_in_parallelogram(pt, verts_y_domain) for pt in y_next)
+            hits_oob = is_oob_state(x_next, (float(y1_params[0]), float(y1_params[-1])),
+                                             (float(y2_params[0]), float(y2_params[-1])))
+            # hits_oob = any(not point_in_parallelogram(pt, verts_y_domain) for pt in y_next)
 
             # Allocate relations to Kripke structure components
             src = cell_state_id(i, j)
             for (ip, jp) in succ_cells:
                 dst = cell_state_id(ip, jp)
-                kripke_transitions.add((src, dst))
+                if not allow_self_loops and dst == src:
+                        continue
+                edge = (src, dst)
+                if edge not in kripke_transitions:
+                    kripke_transitions.add(edge)
+                    succ_count += 1
+                    if dst == src:
+                        self_loop_count += 1
             if hits_oob:
-                kripke_transitions.add((src, oob_state_id))
+                edge = (src, oob_state_id)
+                if edge not in kripke_transitions:
+                    kripke_transitions.add(edge)  # transitions oob
+                    succ_count += 1
 
-            # Force self loop if no in-grid successors and no OOB transition
-            if (not succ_cells) and (not hits_oob):
-                kripke_transitions.add((src, src))
+            # # Force self loop if no in-grid successors and no OOB transition
+            # if (not succ_cells) and (not hits_oob):
+            #     kripke_transitions.add((src, src))
 
             kripke_labels[src] = label
-            # print(f"{src}: {label[0]} cell ({i},{j}) -> {len(succ_cells)} in-grid successors" + (" + OOB" if hits_oob else ""))
+            if count % 10000 == 0:
+                    print(f"    > Processed {count} / {n_kripke_states - 1} states...")
+            count += 1
 
     # Label the out-of-bounds state; add self-loop
     kripke_labels[oob_state_id] = ['fail']
     kripke_transitions.add((oob_state_id, oob_state_id))
 
     # Define initial states (in bounds, non-goal states)
-    initial_states = [
-        s for s in kripke_states
-        if s != oob_state_id#  and 'goal' not in kripke_labels[s]
-    ]
+    initial_states = [s for s in kripke_states if s != oob_state_id]
+
+    # Output stats
+    print(f"Average successors per state: {succ_count / (n_kripke_states - 1):.2f}")
+    print(f"Average self-loops per state: {self_loop_count / (n_kripke_states - 1):.4f}")
+    print(f"Average cell area: {cell_area:.4f}")
+    print(f"Average image area: {image_area / (n_kripke_states - 1):.4f}")
+    print(f"Average image area / cell area: {image_area / ((n_kripke_states - 1) * cell_area):.2f}")
+    print(f"Average centroid displacement: {displacement / (n_kripke_states - 1):.4f}")
+    print(f"Average IoA: {intersection_over_area / (n_kripke_states - 1):.4f}")
 
     # Make the Kripke structure
+    print("Constructing Kripke structure...")
     kripke_structure = pmc.Kripke(S=kripke_states,
                                   S0=initial_states,
                                   R=list(kripke_transitions),
