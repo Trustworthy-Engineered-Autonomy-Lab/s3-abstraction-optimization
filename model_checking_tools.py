@@ -94,6 +94,154 @@ def is_oob_state(vertices, x_bounds, y_bounds):
     return False
 
 
+
+
+def make_kripke(x1_params, x2_params, allow_self_loops=True, advanced_metrics=False):
+
+    # Initialize Kripke structure parameters
+    nstates_1 = len(x1_params) - 1
+    nstates_2 = len(x2_params) - 1
+    n_kripke_states = nstates_1 * nstates_2 + 1 # includes out of bounds state
+    oob_state_id = n_kripke_states - 1
+
+    # Initialize Kripike structure components
+    kripke_states = list(range(n_kripke_states))  # last state is out-of-bounds
+    kripke_transitions = set()
+    kripke_labels = {}
+
+    # ID labeling function
+    def cell_state_id(i, j):
+        return i * nstates_2 + j
+
+    # Determine cell area
+    if advanced_metrics:
+
+        # Cell area using average cell wall lengths
+        dy1 = np.mean(np.diff(x1_params))
+        dy2 = np.mean(np.diff(x2_params))
+        cell_area = dy1 * dy2
+
+    # Loop through each abstract state
+    print("Labeling states and building transitions...")
+    count = 0
+    succ_count = 0
+    self_loop_count = 0
+    image_area = 0.0
+    displacement = 0.0
+    intersection_over_area = 0.0
+    intersection_over_union = 0.0
+    for i in range(nstates_1):
+        x1_lo, x1_hi = x1_params[i], x1_params[i+1]
+        for j in range(nstates_2):
+            x2_lo, x2_hi = x2_params[j], x2_params[j+1]
+            corners = np.array([
+                [x1_lo, x2_lo],
+                [x1_lo, x2_hi],
+                [x1_hi, x2_hi],
+                [x1_hi, x2_lo]])
+
+            # Compute y-space image
+            x_next = dynamics(corners)
+
+            # Check label of current cell
+            label = ['goal'] if is_goal_state(corners) else ['safe']
+
+            # Allocate image area if requested (approximated as AABB of image)
+            if advanced_metrics:
+
+                # Compute AABB side lengths of parent and image
+                x1_lo_pre, x1_hi_pre = float(corners[:, 0].min()), float(corners[:, 0].max())
+                x2_lo_pre, x2_hi_pre = float(corners[:, 1].min()), float(corners[:, 1].max())
+                x1_lo_post, x1_hi_post = float(x_next[:, 0].min()), float(x_next[:, 0].max())
+                x2_lo_post, x2_hi_post = float(x_next[:, 1].min()), float(x_next[:, 1].max())
+
+                # Compute image AABB area
+                img_area = (x1_hi_post - x1_lo_post) * (x2_hi_post - x2_lo_post)
+                image_area += img_area
+
+                # Compute parent AABB area
+                parent_area = (x1_hi_pre - x1_lo_pre) * (x2_hi_pre - x2_lo_pre)
+
+                # Compute displacement between centroids of parent and image AABB
+                dists = np.linalg.norm(x_next - corners, axis=1)
+                displacement += np.mean(dists)
+
+                # Compute the proportion of the parent cell contained in the image AABB
+                l1 = max(0, min(x1_hi_pre, x1_hi_post) - max(x1_lo_pre, x1_lo_post))
+                l2 = max(0, min(x2_hi_pre, x2_hi_post) - max(x2_lo_pre, x2_lo_post))
+                int_area = (l1 * l2)
+                intersection_over_area += int_area / parent_area
+
+                # Compute the proportion of intersection area to union area
+                union_area = parent_area + image_area - int_area
+                intersection_over_union += int_area / union_area
+            
+            # Identify successor cells
+            x1_min, x1_max = float(x_next[:, 0].min()), float(x_next[:, 0].max())
+            x2_min, x2_max = float(x_next[:, 1].min()), float(x_next[:, 1].max())
+            succ_cells = intersecting_cells_from_y_aabb(x1_params, x2_params, x1_min, x1_max, x2_min, x2_max)
+
+            # Indicate if any successor goes out of bounds
+            hits_oob = is_oob_state(x_next, (float(x1_params[0]), float(x1_params[-1])),
+                                             (float(x2_params[0]), float(x2_params[-1])))
+            # hits_oob = any(not point_in_parallelogram(pt, verts_y_domain) for pt in y_next)
+
+            # Allocate relations to Kripke structure components
+            src = cell_state_id(i, j)
+            for (ip, jp) in succ_cells:
+                dst = cell_state_id(ip, jp)
+                if not allow_self_loops and dst == src:
+                        continue
+                edge = (src, dst)
+                if edge not in kripke_transitions:
+                    kripke_transitions.add(edge)
+                    succ_count += 1
+                    if dst == src:
+                        self_loop_count += 1
+            if hits_oob:
+                edge = (src, oob_state_id)
+                if edge not in kripke_transitions:
+                    kripke_transitions.add(edge)  # transitions oob
+                    succ_count += 1
+
+            # # Force self loop if no in-grid successors and no OOB transition
+            # if (not succ_cells) and (not hits_oob):
+            #     kripke_transitions.add((src, src))
+
+            kripke_labels[src] = label
+            if count % 10000 == 0:
+                    print(f"    > Processed {count} / {n_kripke_states - 1} states...")
+            count += 1
+
+    # Label the out-of-bounds state; add self-loop
+    kripke_labels[oob_state_id] = ['fail']
+    kripke_transitions.add((oob_state_id, oob_state_id))
+
+    # Define initial states (in bounds, non-goal states)
+    initial_states = [s for s in kripke_states if s != oob_state_id]
+
+    # Output stats
+    print(f"Average successors per state: {succ_count / (n_kripke_states - 1):.2f}")
+    print(f"Average self-loops per state: {self_loop_count / (n_kripke_states - 1):.4f}")
+    print(f"Average cell area: {cell_area:.4f}")
+    print(f"Average image area: {image_area / (n_kripke_states - 1):.4f}")
+    print(f"Average image area / cell area: {image_area / ((n_kripke_states - 1) * cell_area):.2f}")
+    print(f"Average centroid displacement: {displacement / (n_kripke_states - 1):.4f}")
+    print(f"Average IoA: {intersection_over_area / (n_kripke_states - 1):.4f}")
+    print(f"Average IoU: {intersection_over_union / (n_kripke_states - 1):.4f}")
+
+    # Make the Kripke structure
+    print("Constructing Kripke structure...")
+    kripke_structure = pmc.Kripke(S=kripke_states,
+                                  S0=initial_states,
+                                  R=list(kripke_transitions),
+                                  L=kripke_labels)
+    
+    return kripke_structure
+
+
+
+
 def make_kripke_from_params(y1_params, y2_params, M, allow_self_loops=True, advanced_metrics=False):
 
     # # Unpack domain parameters
