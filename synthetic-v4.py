@@ -7,6 +7,48 @@ import synthetic_objective_tools as sot
 import matplotlib.pyplot as plt
 import model_checking_tools as mct
 
+
+def plot_history_curves(
+    cost_history: np.ndarray,
+    grad_norm_history: np.ndarray,
+    sat_history: np.ndarray,
+    *,
+    out_path: str = "synthetic_v4_history.png",
+    show: bool = True,
+):
+    steps = np.arange(len(cost_history), dtype=int)
+    fig, axes = plt.subplots(3, 1, figsize=(8, 8), sharex=True)
+
+    axes[0].plot(steps, cost_history, lw=1.5)
+    axes[0].set_ylabel("cost")
+    if np.all(np.isfinite(cost_history)) and np.all(cost_history > 0):
+        axes[0].set_yscale("log")
+    axes[0].grid(True, alpha=0.25)
+
+    axes[1].plot(steps, grad_norm_history, lw=1.5)
+    axes[1].set_ylabel("grad norm")
+    if np.all(np.isfinite(grad_norm_history)) and np.all(grad_norm_history > 0):
+        axes[1].set_yscale("log")
+    axes[1].grid(True, alpha=0.25)
+
+    if sat_history is not None and sat_history.size > 0:
+        axes[2].plot(np.arange(len(sat_history), dtype=int), 100.0 * sat_history, lw=1.5)
+        axes[2].set_ylabel("sat (%)")
+        axes[2].set_ylim(0.0, 100.0)
+    else:
+        axes[2].text(0.5, 0.5, "(no sat history)", ha="center", va="center", transform=axes[2].transAxes)
+        axes[2].set_ylabel("sat")
+    axes[2].set_xlabel("step")
+    axes[2].grid(True, alpha=0.25)
+
+    fig.suptitle("Optimization history")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    if show:
+        plt.show()
+    return fig, axes
+
+
 def gradient_descent(
     params_init,
     objective_fn,
@@ -17,6 +59,8 @@ def gradient_descent(
     steps,
     lr,
     grad_clip,
+    do_verify=False,
+    record_every=10,
     print_every=10,
 ):
 
@@ -34,13 +78,52 @@ def gradient_descent(
         g = g * scale
         return p - jnp.asarray(lr_value, dtype=p.dtype) * g, value, g_norm
     
+    if do_verify:
+        gt_reach_regions = mct.get_gt_reach_regions(x_domain, grid_resolution=10)
+    
     params_gd = params_init
+    cost_history = []
+    grad_norm_history = []
+    sat_history = []
+    fnr_history = []
     for k in range(steps):
         params_gd, value, g_norm = gd_step(params_gd, lr)
+
+        if k % record_every == 0:
+            cost_history.append(float(value))
+            grad_norm_history.append(float(g_norm))
+
+        if do_verify and k % record_every == 0:
+
+            # Make Kripke from parameters and model check
+            x1_params, x2_params = sot.extract_grid_params(
+            params_gd,
+            n1_internal=n1_internal,
+            n2_internal=n2_internal,
+            x1_min=x1_min,
+            x1_max=x1_max,
+            x2_min=x2_min,
+            x2_max=x2_max,
+            )
+            kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=True, advanced_metrics=True)
+            sat_states = mct.model_check_kripke(kripke_structure)
+            sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
+            sat_history.append(sat_rate)
+
+            # Compare cells to ground truth and compute FNR
+            ground_truth_reference = mct.check_ground_truth_fast(x1_params, x2_params, x_domain, gt_reach_regions)
+            checked_sat_states = set(sat_states)
+            true_sat_states = {s for s, v in ground_truth_reference.items() if v == 'goal'}
+            fnr, _ = mct.false_negative_rate(true_sat_states, checked_sat_states)
+            fnr_history.append(fnr)
+        
         if k % print_every == 0:
-            print(f"[{k}] J(p)={float(value):.3f}, |∇J(p)|={float(g_norm):.3f}")
-    
-    return params_gd
+            if do_verify and k % record_every == 0:
+                print(f"[{k}] J(p)={float(value):.3f}, |∇J(p)|={float(g_norm):.3f}, Sat rate: {sat_rate*100.0:.2f}%, FNR: {fnr:.4f}")
+            else:
+                print(f"[{k}] J(p)={float(value):.3f}, |∇J(p)|={float(g_norm):.3f}")
+
+    return params_gd, np.array(cost_history), np.array(grad_norm_history), np.array(sat_history), np.array(fnr_history)
 
 if __name__ == "__main__":
 
@@ -98,32 +181,49 @@ if __name__ == "__main__":
     print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
     # Optimize parameters via gradient descent
-    params_opt = gradient_descent(
+    params_opt, cost_history, grad_norm_history, sat_history, fnr_history = gradient_descent(
         params,
         sot.image_area_over_parent,
         x_domain=x_domain,
         n1_internal=n1_internal,
         n2_internal=n2_internal,
-        steps=10_000,
-        lr=6e-2,
+        steps=500,
+        lr=5e-4,
         grad_clip=1e3,
-        print_every=1000
-    )
+        print_every=1,
+        record_every=10,
+        do_verify=True,)
 
-    # Make Kripke of optimized grid for reference
-    x1_params, x2_params = sot.extract_grid_params(
-        params_opt,
-        n1_internal=n1_internal,
-        n2_internal=n2_internal,
-        x1_min=x1_min,
-        x1_max=x1_max,
-        x2_min=x2_min,
-        x2_max=x2_max,
-    )
-    kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=True, advanced_metrics=True)
-    sat_states = mct.model_check_kripke(kripke_structure)
-    sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
-    print(f"Sat rate: {sat_rate*100.0:.2f}%")
+    # plot_history_curves(
+    #     cost_history,
+    #     grad_norm_history,
+    #     sat_history,
+    #     out_path="synthetic_v4_history.png",
+    #     show=True,
+    # )
+
+    # # Make Kripke of optimized grid for reference
+    # x1_params, x2_params = sot.extract_grid_params(
+    #     params_opt,
+    #     n1_internal=n1_internal,
+    #     n2_internal=n2_internal,
+    #     x1_min=x1_min,
+    #     x1_max=x1_max,
+    #     x2_min=x2_min,
+    #     x2_max=x2_max,
+    # )
+    # kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=True, advanced_metrics=True, verbose=True)
+    # sat_states = mct.model_check_kripke(kripke_structure)
+    # sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
+    # print(f"Sat rate: {sat_rate*100.0:.2f}%")
+
+    # # Compare against ground truth safety
+    # gt_reach_regions = mct.get_gt_reach_regions(x_domain, grid_resolution=10)
+    # ground_truth_reference = mct.check_ground_truth_fast(x1_params, x2_params, x_domain, gt_reach_regions)
+    # checked_sat_states = set(sat_states)
+    # true_sat_states = {s for s, v in ground_truth_reference.items() if v == 'goal'}
+    # fnr, _ = mct.false_negative_rate(true_sat_states, checked_sat_states)
+    # print(f"False Negative Rate (FNR): {fnr:.4f}")
 
 
     # print(x1_params)

@@ -163,9 +163,7 @@ if __name__ == "__main__":
     sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
     print(f"Sat rate: {sat_rate*100.0:.2f}%")
 
-
-    # sat_init_states = mct.model_check_kripke(kripke_structure)
-    # checked_safe_states = set(sat_init_states)
+    # checked_safe_states = set(sat_states)
     # true_safe_states = {s for s, v in ground_truth_check.items() if v == 'goal'}
     # fnr, false_negative_states = mct.false_negative_rate(true_safe_states, checked_safe_states)
     # print(f"False Negative Rate (FNR): {fnr:.4f}")
