@@ -137,7 +137,7 @@ def gradient_descent(
             x2_min=x2_min,
             x2_max=x2_max,
             )
-            kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=True, advanced_metrics=True)
+            kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=False, advanced_metrics=True)
             sat_states = mct.model_check_kripke(kripke_structure)
             sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
             sat_history.append(sat_rate)
@@ -208,7 +208,7 @@ if __name__ == "__main__":
         x2_min=x2_min,
         x2_max=x2_max,
     )
-    kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=True, advanced_metrics=True, verbose=True)
+    kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=False, advanced_metrics=True, verbose=True)
     sat_states = mct.model_check_kripke(kripke_structure)
     sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
     print(f"Sat rate: {sat_rate*100.0:.2f}%")
@@ -244,7 +244,7 @@ if __name__ == "__main__":
         grad_clip=1e3,
         print_every=10,
         record_every=10,
-        do_verify=True,)
+        do_verify=False,)
     
 
 
@@ -260,10 +260,17 @@ if __name__ == "__main__":
         x2_min=x2_min,
         x2_max=x2_max,
     )
-    kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=True, advanced_metrics=True, verbose=True)
+    kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=False, advanced_metrics=True, verbose=True)
     sat_states = mct.model_check_kripke(kripke_structure)
     sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
     print(f"Sat rate: {sat_rate*100.0:.2f}%")
+
+    # Compare cells to ground truth and compute FNR
+    gt_reach_regions = mct.get_gt_reach_regions(x_domain, grid_resolution=10)
+    ground_truth_reference = mct.check_ground_truth_fast(x1_params, x2_params, x_domain, gt_reach_regions)
+    checked_sat_states = set(sat_states)
+    true_sat_states = {s for s, v in ground_truth_reference.items() if v == 'goal'}
+    fnr, _ = mct.false_negative_rate(true_sat_states, checked_sat_states)
 
 
     plot_grid_sat_map(

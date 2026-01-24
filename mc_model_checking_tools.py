@@ -177,9 +177,9 @@ def make_kripke_from_params(y1_params, y2_params, M):
                 dst = cell_state_id(ip, jp)
                 kripke_transitions.add((src, dst))
 
-            # Force self loop if no in-grid successors
-            if (not succ_cells):
-                kripke_transitions.add((src, src))
+            # # Force self loop if no in-grid successors
+            # if (not succ_cells):
+            #     kripke_transitions.add((src, src))
 
             kripke_labels[src] = label
 
@@ -292,7 +292,7 @@ def make_kripke(x1_params, x2_params, allow_self_loops=True, advanced_metrics=Fa
             src = cell_state_id(i, j)
             for (ip, jp) in succ_cells:
                 dst = cell_state_id(ip, jp)
-                if not allow_self_loops and dst == src:
+                if not allow_self_loops and dst == src and len(succ_cells) > 1:
                         continue
                 edge = (src, dst)
                 if edge not in kripke_transitions:
@@ -302,7 +302,7 @@ def make_kripke(x1_params, x2_params, allow_self_loops=True, advanced_metrics=Fa
                         self_loop_count += 1
 
             # # Force self loop if no in-grid successors and no OOB transition
-            # if (not succ_cells) and (not hits_oob):
+            # if not succ_cells:
             #     kripke_transitions.add((src, src))
 
             kripke_labels[src] = label

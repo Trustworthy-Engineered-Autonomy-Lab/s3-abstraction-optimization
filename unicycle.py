@@ -2,6 +2,318 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import uni_model_checking_tools as umct
+import uni_objective_tools as uot
+import jax
+import jax.numpy as jnp
+
+
+
+def gradient_descent(
+    params_init,
+    objective_fn,
+    *,
+    domain,
+    n1_internal,
+    n2_internal,
+    n3_internal,
+    steps,
+    lr,
+    grad_clip,
+    do_verify=False,
+    record_every=10,
+    print_every=10,
+):
+
+    @jax.jit
+    def gd_step(p, lr_value):
+        value, g = jax.value_and_grad(objective_fn)(
+            p,
+            domain=domain,
+            n1_internal=n1_internal,
+            n2_internal=n2_internal,
+            n3_internal=n3_internal,
+        )
+        g = jnp.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0)
+        g_norm = jnp.linalg.norm(g)
+        scale = jnp.minimum(1.0, grad_clip / (g_norm + 1e-12))
+        g = g * scale
+        return p - jnp.asarray(lr_value, dtype=p.dtype) * g, value, g_norm
+    
+    params_gd = params_init
+    cost_history = []
+    grad_norm_history = []
+    for k in range(steps):
+        params_gd, value, g_norm = gd_step(params_gd, lr)
+
+        if k % record_every == 0:
+            cost_history.append(float(value))
+            grad_norm_history.append(float(g_norm))
+        
+        if k % print_every == 0:
+            print(f"[{k}] J(p)={float(value):.3f}, |∇J(p)|={float(g_norm):.3f}")
+
+    return params_gd, np.array(cost_history), np.array(grad_norm_history)
+
+
+
+
+
+def plot_optimized_grid_params(
+    x_params: np.ndarray,
+    y_params: np.ndarray,
+    theta_params: np.ndarray,
+    *,
+    domain,
+    grid_alpha: float = 0.35,
+):
+    """Simple visualization of optimized grid parameters.
+
+    - XY: draws vertical/horizontal grid lines.
+    - Cell widths: bar plots for dx, dy, dtheta.
+    """
+
+    x_min, x_max, y_min, y_max, theta_min, theta_max = domain
+
+    dx = np.diff(x_params)
+    dy = np.diff(y_params)
+    dtheta = np.diff(theta_params)
+
+    fig, axs = plt.subplots(1, 3, figsize=(16, 4), constrained_layout=True)
+
+    # 1) XY grid lines
+    ax = axs[0]
+    for xv in x_params:
+        ax.axvline(xv, color="k", linewidth=0.7, alpha=grid_alpha)
+    for yv in y_params:
+        ax.axhline(yv, color="k", linewidth=0.7, alpha=grid_alpha)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_title("Optimized XY grid")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+
+    # 2) dx bar plot
+    ax = axs[1]
+    ax.bar(np.arange(len(dx)), dx, width=1.0)
+    ax.set_title("Cell widths: dx")
+    ax.set_xlabel("x-cell index")
+    ax.set_ylabel("dx")
+
+    # 3) dy bar plot
+    ax = axs[2]
+    ax.bar(np.arange(len(dy)), dy, width=1.0)
+    ax.set_title("Cell widths: dy")
+    ax.set_xlabel("y-cell index")
+    ax.set_ylabel("dy")
+
+    fig2, axs2 = plt.subplots(1, 2, figsize=(12, 3), constrained_layout=True)
+    ax = axs2[0]
+    ax.vlines(theta_params, 0.0, 1.0, color="k", linewidth=0.8)
+    ax.set_xlim(theta_min, theta_max)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_yticks([])
+    ax.set_title("Theta partition lines")
+    ax.set_xlabel("theta")
+
+    ax = axs2[1]
+    ax.bar(np.arange(len(dtheta)), dtheta, width=1.0)
+    ax.set_title("Cell widths: dtheta")
+    ax.set_xlabel("theta-cell index")
+    ax.set_ylabel("dtheta")
+
+    return fig, fig2
+
+
+if __name__ == "__main__":
+
+    # Multiple trajectory example
+
+    # Environment details
+    obs_center = np.array([25.0, 25.0])
+    obs_radius = 5.0
+    goal_center = np.array([40.0, 20.0])
+    goal_radius = 8.0
+
+    obstacle_centers = np.array([obs_center])
+    obstacle_radii = np.array([obs_radius])
+
+    # # Batch simulate
+    # N = 100
+    # steps = 250
+    # theta0 = 0.0 # fixed initial heading
+
+    # rng = np.random.default_rng(0)
+    # x0s = rng.uniform([0.0, 0.0], [20.0, 40.0], size=(N, 2))
+
+    # trajectories = []
+    # for i in range(N):
+    #     x0 = np.array([x0s[i, 0], x0s[i, 1], theta0], dtype=float)
+    #     traj = umct.simulate_trajectory(
+    #         x0,
+    #         steps=steps,
+    #         goal_center=goal_center,
+    #         goal_radius=goal_radius,
+    #     )
+    #     trajectories.append(traj)
+
+    # # Plot trajectories and environment
+    # plt.figure()
+    # for i, traj in enumerate(trajectories):
+    #     plt.plot(traj[:, 0], traj[:, 1], linewidth=1.0, alpha=0.35)
+    #     plt.plot(traj[0, 0], traj[0, 1], marker='.', color='k', markersize=3, alpha=0.6)
+
+    # obs_circle = plt.Circle(obs_center, obs_radius, color='r', alpha=0.5, label='Obstacle')
+    # goal_circle = plt.Circle(goal_center, goal_radius, color='g', alpha=0.35, label='Goal')
+    # plt.gca().add_artist(obs_circle)
+    # plt.gca().add_artist(goal_circle)
+
+    # plt.title(f"Dubins trajectories w/obstacle and goal")
+    # plt.xlabel("X position")
+    # plt.ylabel("Y position")
+    # plt.axis('equal')
+    # plt.grid(True)
+    # plt.show()
+
+    # State space domain
+    x_min, x_max = 0.0, 50.0
+    y_min, y_max = 0.0, 40.0
+    theta_min, theta_max = -np.pi, np.pi
+    domain = (x_min, x_max, y_min, y_max, theta_min, theta_max)
+
+    # Example grid parameters
+    num_x_params = 100
+    num_y_params = 100
+    num_theta_params = 100
+    key = jax.random.PRNGKey(0)
+    u1 = jnp.zeros((num_x_params,))  # initial uniform spacing
+    u2 = jnp.zeros((num_y_params,))
+    u3 = jnp.zeros((num_theta_params,))
+
+    # Pack initial params; check initial objective + grad
+    params = jnp.concatenate([u1, u2, u3])
+
+    # Compute initial objective and gradient
+    val, grad = jax.value_and_grad(uot.image_volume)(
+        params,
+        domain=domain,
+        n1_internal=num_x_params,
+        n2_internal=num_y_params,
+        n3_internal=num_theta_params,
+    )
+    print(f"Initial objective value: {val:.4f}")
+    print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
+
+    # Make the kripke structure; check LTL property
+    x_params, y_params, theta_params = uot.extract_grid_params(
+        params,
+        n1_internal=num_x_params,
+        n2_internal=num_y_params,
+        n3_internal=num_theta_params,
+        domain=domain,
+    )
+    kripke_structure = umct.make_kripke_from_params(x_params, y_params, theta_params,
+                                                    allow_self_loops=True, advanced_metrics=True)
+    sat_states = umct.model_check_kripke(kripke_structure)
+    sat_rate = len(sat_states)/((num_x_params+1) * (num_y_params+1) * (num_theta_params+1))
+    print(f"Sat rate: {sat_rate*100.0:.2f}%")
+
+    # Gradient descent to optimize grid
+    params_opt, cost_history, grad_norm_history = gradient_descent(
+        params,
+        uot.image_volume_over_parent,
+        domain=domain,
+        n1_internal=num_x_params,
+        n2_internal=num_y_params,
+        n3_internal=num_theta_params,
+        steps=500,
+        lr=5e-5,
+        grad_clip=1e3,
+        print_every=1,
+        record_every=10,
+        do_verify=False,
+    )
+
+
+    # Extract grid parameters from line gaps
+    x_params, y_params, theta_params = uot.extract_grid_params(
+        params_opt,
+        n1_internal=num_x_params,
+        n2_internal=num_y_params,
+        n3_internal=num_theta_params,
+        domain=domain,
+    )
+
+    plot_optimized_grid_params(x_params, y_params, theta_params, domain=domain)
+    plt.show()
+
+
+    # Make the kripke structure; check LTL property
+    x_params, y_params, theta_params = uot.extract_grid_params(
+        params_opt,
+        n1_internal=num_x_params,
+        n2_internal=num_y_params,
+        n3_internal=num_theta_params,
+        domain=domain,
+    )
+    kripke_structure = umct.make_kripke_from_params(x_params, y_params, theta_params,
+                                                    allow_self_loops=True, advanced_metrics=True)
+    sat_states = umct.model_check_kripke(kripke_structure)
+    sat_rate = len(sat_states)/((num_x_params+1) * (num_y_params+1) * (num_theta_params+1))
+    print(f"Sat rate: {sat_rate*100.0:.2f}%")
+
+
+
+
+
+
+    # # Visualization (3D voxel plot of state cubes)
+    # # Tip: set plot_unsat=False if rendering is too slow.
+    # umct.plot_sat_voxels(
+    #     x_params_ends,
+    #     y_params_ends,
+    #     theta_params_ends,
+    #     sat_states,
+    #     plot_unsat=False,
+    # )
+
+
+    # # Single trajectory example
+    # # Environment details (you can add more obstacles by extending these arrays)
+    # obs_center = np.array([20.0, 30.0])
+    # obs_radius = 5.0
+    # goal_center = np.array([40.0, 20.0])
+    # goal_radius = 5.0  # only used for termination check
+
+    # obstacle_centers = np.array([obs_center])
+    # obstacle_radii = np.array([obs_radius])
+
+    # # Initial state: x, y, theta
+    # state = np.array([15.0, 40.0, 0.0])
+
+    # trajectory = simulate_trajectory(
+    #     state,
+    #     steps=250,
+    #     goal_center=goal_center,
+    #     goal_radius=goal_radius,
+    # )
+
+    # trajectory = np.array(trajectory)
+
+    # # Plotting the trajectory and environment
+    # plt.figure()
+    # plt.plot(trajectory[:, 0], trajectory[:, 1], marker='o', markersize=2, label='Trajectory')
+    # obs_circle = plt.Circle(obs_center, obs_radius, color='r', alpha=0.5, label='Obstacle')
+    # goal_circle = plt.Circle(goal_center, goal_radius, color='g', alpha=0.35, label='Goal')
+    # plt.gca().add_artist(obs_circle)
+    # plt.gca().add_artist(goal_circle)
+    # plt.title("Unicycle Model Trajectory")
+    # plt.xlabel("X position")
+    # plt.ylabel("Y position")
+    # plt.axis('equal')
+    # plt.grid(True)
+    # plt.legend()
+    # plt.show()
 
 # def wrap_to_pi(angle):
 #     return (angle + np.pi) % (2 * np.pi) - np.pi
@@ -121,124 +433,4 @@ import uni_model_checking_tools as umct
 #         if (goal_center is not None) and (goal_radius is not None):
 #             if np.linalg.norm(state[:2] - goal_center) <= goal_radius:
 #                 break
-#     return np.array(traj)
-
-
-if __name__ == "__main__":
-
-    # Multiple trajectory example
-
-    # Environment details
-    obs_center = np.array([25.0, 25.0])
-    obs_radius = 5.0
-    goal_center = np.array([40.0, 20.0])
-    goal_radius = 8.0
-
-    obstacle_centers = np.array([obs_center])
-    obstacle_radii = np.array([obs_radius])
-
-    # Batch simulate
-    N = 100
-    steps = 250
-    theta0 = np.pi # fixed initial heading
-
-    rng = np.random.default_rng(0)
-    x0s = rng.uniform([0.0, 0.0], [20.0, 40.0], size=(N, 2))
-
-    trajectories = []
-    for i in range(N):
-        x0 = np.array([x0s[i, 0], x0s[i, 1], theta0], dtype=float)
-        traj = umct.simulate_trajectory(
-            x0,
-            steps=steps,
-            goal_center=goal_center,
-            goal_radius=goal_radius,
-        )
-        trajectories.append(traj)
-
-    # Plot trajectories and environment
-    plt.figure()
-    for i, traj in enumerate(trajectories):
-        plt.plot(traj[:, 0], traj[:, 1], linewidth=1.0, alpha=0.35)
-        plt.plot(traj[0, 0], traj[0, 1], marker='.', color='k', markersize=3, alpha=0.6)
-
-    obs_circle = plt.Circle(obs_center, obs_radius, color='r', alpha=0.5, label='Obstacle')
-    goal_circle = plt.Circle(goal_center, goal_radius, color='g', alpha=0.35, label='Goal')
-    plt.gca().add_artist(obs_circle)
-    plt.gca().add_artist(goal_circle)
-
-    plt.title(f"Dubins trajectories w/obstacle and goal")
-    plt.xlabel("X position")
-    plt.ylabel("Y position")
-    plt.axis('equal')
-    plt.grid(True)
-    plt.show()
-
-    # State space domain
-    x_min, x_max = 0.0, 50.0
-    y_min, y_max = 0.0, 40.0
-    theta_min, theta_max = -np.pi, np.pi
-
-    # Example grid parameters
-    num_x_params = 80
-    num_y_params = 80
-    num_theta_params = 40
-    x_params_ends = np.linspace(x_min, x_max, num_x_params + 2)  # include boundaries
-    y_params_ends = np.linspace(y_min, y_max, num_y_params + 2)
-    theta_params_ends = np.linspace(theta_min, theta_max, num_theta_params + 2)
-
-    # Make the kripke structure; check LTL property
-    kripke_structure = umct.make_kripke_from_params(x_params_ends, y_params_ends, theta_params_ends,
-                                                    allow_self_loops=True, advanced_metrics=True)
-    sat_states = umct.model_check_kripke(kripke_structure)
-    sat_rate = len(sat_states)/((num_x_params+1) * (num_y_params+1) * (num_theta_params+1))
-    print(f"Sat rate: {sat_rate*100.0:.2f}%")
-
-    # # Visualization (3D voxel plot of state cubes)
-    # # Tip: set plot_unsat=False if rendering is too slow.
-    # umct.plot_sat_voxels(
-    #     x_params_ends,
-    #     y_params_ends,
-    #     theta_params_ends,
-    #     sat_states,
-    #     plot_unsat=False,
-    # )
-
-
-    # # Single trajectory example
-    # # Environment details (you can add more obstacles by extending these arrays)
-    # obs_center = np.array([20.0, 30.0])
-    # obs_radius = 5.0
-    # goal_center = np.array([40.0, 20.0])
-    # goal_radius = 5.0  # only used for termination check
-
-    # obstacle_centers = np.array([obs_center])
-    # obstacle_radii = np.array([obs_radius])
-
-    # # Initial state: x, y, theta
-    # state = np.array([15.0, 40.0, 0.0])
-
-    # trajectory = simulate_trajectory(
-    #     state,
-    #     steps=250,
-    #     goal_center=goal_center,
-    #     goal_radius=goal_radius,
-    # )
-
-    # trajectory = np.array(trajectory)
-
-    # # Plotting the trajectory and environment
-    # plt.figure()
-    # plt.plot(trajectory[:, 0], trajectory[:, 1], marker='o', markersize=2, label='Trajectory')
-    # obs_circle = plt.Circle(obs_center, obs_radius, color='r', alpha=0.5, label='Obstacle')
-    # goal_circle = plt.Circle(goal_center, goal_radius, color='g', alpha=0.35, label='Goal')
-    # plt.gca().add_artist(obs_circle)
-    # plt.gca().add_artist(goal_circle)
-    # plt.title("Unicycle Model Trajectory")
-    # plt.xlabel("X position")
-    # plt.ylabel("Y position")
-    # plt.axis('equal')
-    # plt.grid(True)
-    # plt.legend()
-    # plt.show()
-
+#     return np.array(traj)s
