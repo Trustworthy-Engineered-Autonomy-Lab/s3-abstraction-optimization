@@ -5,7 +5,8 @@ import uni_model_checking_tools as umct
 import uni_objective_tools as uot
 import jax
 import jax.numpy as jnp
-
+import pickle as pkl
+import time
 
 
 def gradient_descent(
@@ -53,9 +54,6 @@ def gradient_descent(
             print(f"[{k}] J(p)={float(value):.3f}, |∇J(p)|={float(g_norm):.3f}")
 
     return params_gd, np.array(cost_history), np.array(grad_norm_history)
-
-
-
 
 
 def plot_optimized_grid_params(
@@ -127,7 +125,7 @@ def plot_optimized_grid_params(
 
 if __name__ == "__main__":
 
-    # Multiple trajectory example
+    start_cpu = time.process_time()
 
     # Environment details
     obs_center = np.array([25.0, 25.0])
@@ -139,7 +137,7 @@ if __name__ == "__main__":
     obstacle_radii = np.array([obs_radius])
 
     # # Batch simulate
-    # N = 100
+    # N = 10
     # steps = 250
     # theta0 = 0.0 # fixed initial heading
 
@@ -149,7 +147,7 @@ if __name__ == "__main__":
     # trajectories = []
     # for i in range(N):
     #     x0 = np.array([x0s[i, 0], x0s[i, 1], theta0], dtype=float)
-    #     traj = umct.simulate_trajectory(
+    #     traj = uot.simulate_trajectory(
     #         x0,
     #         steps=steps,
     #         goal_center=goal_center,
@@ -186,48 +184,76 @@ if __name__ == "__main__":
     num_y_params = 100
     num_theta_params = 100
     key = jax.random.PRNGKey(0)
-    u1 = jnp.zeros((num_x_params,))  # initial uniform spacing
-    u2 = jnp.zeros((num_y_params,))
-    u3 = jnp.zeros((num_theta_params,))
+    sigma_u = 1.0
+    # u1 = jnp.zeros((num_x_params,))  # initial uniform spacing
+    # u2 = jnp.zeros((num_y_params,))
+    # u3 = jnp.zeros((num_theta_params,))
+    key, k_u1, k_u2 = jax.random.split(key, 3)
+    u1 = sigma_u * jax.random.normal(k_u1, (num_x_params,))
+    u2 = sigma_u * jax.random.normal(k_u2, (num_y_params,))
+    u3 = sigma_u * jax.random.normal(k_u2, (num_theta_params,))
 
-    # Pack initial params; check initial objective + grad
+    # # Pack initial params; check initial objective + grad
     params = jnp.concatenate([u1, u2, u3])
 
-    # Compute initial objective and gradient
-    val, grad = jax.value_and_grad(uot.image_volume)(
-        params,
-        domain=domain,
-        n1_internal=num_x_params,
-        n2_internal=num_y_params,
-        n3_internal=num_theta_params,
-    )
-    print(f"Initial objective value: {val:.4f}")
-    print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
+    # # # Compute initial objective and gradient
+    # # val, grad = jax.value_and_grad(uot.image_volume)(
+    # #     params,
+    # #     domain=domain,
+    # #     n1_internal=num_x_params,
+    # #     n2_internal=num_y_params,
+    # #     n3_internal=num_theta_params,
+    # # )
+    # # print(f"Initial objective value: {val:.4f}")
+    # # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
-    # Make the kripke structure; check LTL property
-    x_params, y_params, theta_params = uot.extract_grid_params(
-        params,
-        n1_internal=num_x_params,
-        n2_internal=num_y_params,
-        n3_internal=num_theta_params,
-        domain=domain,
-    )
-    kripke_structure = umct.make_kripke_from_params(x_params, y_params, theta_params,
-                                                    allow_self_loops=True, advanced_metrics=True)
-    sat_states = umct.model_check_kripke(kripke_structure)
-    sat_rate = len(sat_states)/((num_x_params+1) * (num_y_params+1) * (num_theta_params+1))
-    print(f"Sat rate: {sat_rate*100.0:.2f}%")
+    # # Make the kripke structure; check LTL property
+    # x_params, y_params, theta_params = uot.extract_grid_params(
+    #     params,
+    #     n1_internal=num_x_params,
+    #     n2_internal=num_y_params,
+    #     n3_internal=num_theta_params,
+    #     domain=domain,
+    # )
+    # kripke_structure = umct.make_kripke_from_params(x_params, y_params, theta_params, allow_self_loops=False, advanced_metrics=True)
+    # sat_states = umct.model_check_kripke(kripke_structure)
+    # sat_rate = len(sat_states)/((num_x_params+1) * (num_y_params+1) * (num_theta_params+1))
+    # print(f"Sat rate: {sat_rate*100.0:.2f}%")
+
+    # # Compare against ground truth safety
+    # # gt_reach_regions = umct.get_gt_reach_regions(domain, grid_resolution=100, verbose=True)
+    # # with open("unicycle_gt_reach_regions_100.pkl", "wb") as f:
+    # #     pkl.dump(gt_reach_regions, f)
+    # with open("unicycle_gt_reach_regions_100.pkl", "rb") as f:
+    #     gt_reach_regions = pkl.load(f)
+    # ground_truth_reference = umct.check_ground_truth_fast(x_params, y_params, theta_params, domain, gt_reach_regions)
+    # checked_sat_states = set(sat_states)
+    # true_sat_states = {s for s, v in ground_truth_reference.items() if v == 'goal'}
+
+    # # Compute sat coverage in ground truth
+    # gt_sat_states = {s for s, v in gt_reach_regions.items() if v in ['goal']}
+    # gt_coverage = len(gt_sat_states) / len(gt_reach_regions)
+
+    # # Compute sat coverage of abstract states (% of area covered by sat states); compare to gt
+    # sat_coverage = umct.compute_sat_coverage(sat_states, x_params, y_params, theta_params)
+    # coverage_proportion = sat_coverage / gt_coverage
+    # print(f"Coverage proportion: {coverage_proportion:.4f}%")
+
+    # # Compute FNR
+    # fnr, _ = umct.false_negative_rate(true_sat_states, checked_sat_states)
+    # print(f"False Negative Rate (FNR): {fnr:.4f}")
+
 
     # Gradient descent to optimize grid
     params_opt, cost_history, grad_norm_history = gradient_descent(
         params,
-        uot.image_volume_over_parent,
+        uot.image_volume,
         domain=domain,
         n1_internal=num_x_params,
         n2_internal=num_y_params,
         n3_internal=num_theta_params,
-        steps=500,
-        lr=5e-5,
+        steps=200,
+        lr=1e-4,
         grad_clip=1e3,
         print_every=1,
         record_every=10,
@@ -247,20 +273,82 @@ if __name__ == "__main__":
     plot_optimized_grid_params(x_params, y_params, theta_params, domain=domain)
     plt.show()
 
-
     # Make the kripke structure; check LTL property
     x_params, y_params, theta_params = uot.extract_grid_params(
-        params_opt,
+        params,
         n1_internal=num_x_params,
         n2_internal=num_y_params,
         n3_internal=num_theta_params,
         domain=domain,
     )
-    kripke_structure = umct.make_kripke_from_params(x_params, y_params, theta_params,
-                                                    allow_self_loops=True, advanced_metrics=True)
+    kripke_structure = umct.make_kripke_from_params(x_params, y_params, theta_params, allow_self_loops=False, advanced_metrics=True)
+
+    end_cpu = time.process_time()
+    cpu_time = end_cpu - start_cpu
+    print(f"Model build CPU time (s): {cpu_time:.2f}")
+
     sat_states = umct.model_check_kripke(kripke_structure)
     sat_rate = len(sat_states)/((num_x_params+1) * (num_y_params+1) * (num_theta_params+1))
     print(f"Sat rate: {sat_rate*100.0:.2f}%")
+
+    # Compare against ground truth safety
+    # gt_reach_regions = umct.get_gt_reach_regions(domain, grid_resolution=100, verbose=True)
+    # with open("unicycle_gt_reach_regions_100.pkl", "wb") as f:
+    #     pkl.dump(gt_reach_regions, f)
+    with open("unicycle_gt_reach_regions_100.pkl", "rb") as f:
+        gt_reach_regions = pkl.load(f)
+    ground_truth_reference = umct.check_ground_truth_fast(x_params, y_params, theta_params, domain, gt_reach_regions)
+    checked_sat_states = set(sat_states)
+    true_sat_states = {s for s, v in ground_truth_reference.items() if v == 'goal'}
+
+    # Compute sat coverage in ground truth
+    gt_sat_states = {s for s, v in gt_reach_regions.items() if v in ['goal']}
+    gt_coverage = len(gt_sat_states) / len(gt_reach_regions)
+
+    # Compute sat coverage of abstract states (% of area covered by sat states); compare to gt
+    sat_coverage = umct.compute_sat_coverage(sat_states, x_params, y_params, theta_params)
+    coverage_proportion = sat_coverage / gt_coverage
+    print(f"Coverage proportion: {coverage_proportion:.4f}%")
+
+    # Compute FNR
+    fnr, _ = umct.false_negative_rate(true_sat_states, checked_sat_states)
+    print(f"False Negative Rate (FNR): {fnr:.4f}")
+
+
+
+    # # Make the kripke structure; check LTL property
+    # x_params, y_params, theta_params = uot.extract_grid_params(
+    #     params_opt,
+    #     n1_internal=num_x_params,
+    #     n2_internal=num_y_params,
+    #     n3_internal=num_theta_params,
+    #     domain=domain,
+    # )
+    # kripke_structure = umct.make_kripke_from_params(x_params, y_params, theta_params,
+    #                                                 allow_self_loops=True, advanced_metrics=True)
+    # sat_states = umct.model_check_kripke(kripke_structure)
+    # sat_rate = len(sat_states)/((num_x_params+1) * (num_y_params+1) * (num_theta_params+1))
+    # print(f"Sat rate: {sat_rate*100.0:.2f}%")
+
+    # # Compare against ground truth safety
+    # gt_reach_regions = umct.get_gt_reach_regions(x_domain, grid_resolution=100)
+    # ground_truth_reference = umct.check_ground_truth_fast(x1_params, x2_params, x_domain, gt_reach_regions)
+    # checked_sat_states = set(sat_states)
+    # true_sat_states = {s for s, v in ground_truth_reference.items() if v == 'goal'}
+
+    # # Compute sat coverage in ground truth
+    # gt_sat_states = {s for s, v in gt_reach_regions.items() if v in ['goal']}
+    # gt_coverage = len(gt_sat_states) / len(gt_reach_regions)
+
+    # Compute sat coverage of abstract states (% of area covered by sat states); compare to gt
+    # sat_coverage = umct.compute_sat_coverage(sat_states, x_params, y_params, theta_params)
+    # print(f"Sat coverage: {sat_coverage*100:.2f}")
+    # coverage_proportion = sat_coverage / gt_coverage
+    # print(f"Coverage proportion: {coverage_proportion*100:.2f}%")
+
+    # # Compute FNR
+    # fnr, _ = mct.false_negative_rate(true_sat_states, checked_sat_states)
+    # print(f"False Negative Rate (FNR): {fnr:.4f}")
 
 
 

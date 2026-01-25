@@ -341,7 +341,7 @@ def make_kripke(x1_params, x2_params, allow_self_loops=True, advanced_metrics=Fa
 def model_check_kripke(kripke_structure):
 
     start_cpu = time.process_time()
-    print("Starting model checking...")
+    # print("Starting model checking...")
     phi = 'A (F goal)'  # Eventually reach goal
     sat = CTL.modelcheck(kripke_structure, phi)
     end_cpu = time.process_time()
@@ -806,3 +806,31 @@ def check_ground_truth_fast(x1_params, x2_params, x_domain, gt_reach_regions):
                 ground_truth_check[src] = 'goal' if seen_goal else 'unk'
 
     return ground_truth_check
+
+
+def compute_sat_coverage(sat_ids, x1_params, x2_params):
+
+    x1_min = x1_params[0]
+    x1_max = x1_params[-1]
+    x2_min = x2_params[0]
+    x2_max = x2_params[-1]
+    total_area = (x1_max - x1_min) * (x2_max - x2_min)
+
+    nstates_1 = len(x1_params) - 1
+    nstates_2 = len(x2_params) - 1
+
+    # ID labeling function
+    def cell_state_id(i, j):
+        return i * nstates_2 + j
+
+    # Loop through each abstract state
+    sat_area = 0.0
+    for i in range(nstates_1):
+        x1_lo, x1_hi = x1_params[i], x1_params[i+1]
+        for j in range(nstates_2):
+            x2_lo, x2_hi = x2_params[j], x2_params[j+1]
+
+            if cell_state_id(i, j) in sat_ids:
+                sat_area += (x1_hi - x1_lo) * (x2_hi - x2_lo)
+    
+    return sat_area / total_area

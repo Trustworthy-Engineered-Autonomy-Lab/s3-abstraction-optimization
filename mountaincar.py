@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 # from mc_model_checking_tools import make_kripke_from_params, model_check_kripke, fixed_check_ground_truth, false_negative_rate
 import jax
 import jax.numpy as jnp
+import pickle as pkl
+import time
 
 
 def plot_grid_sat_map(
@@ -77,10 +79,6 @@ def plot_grid_sat_map(
     return fig, ax
 
 
-
-
-
-
 def gradient_descent(
     params_init,
     objective_fn,
@@ -111,13 +109,15 @@ def gradient_descent(
         return p - jnp.asarray(lr_value, dtype=p.dtype) * g, value, g_norm
     
     if do_verify:
-        gt_reach_regions = mct.get_gt_reach_regions(x_domain, grid_resolution=10)
+        gt_reach_regions = mct.get_gt_reach_regions(x_domain, grid_resolution=100)
     
     params_gd = params_init
     cost_history = []
     grad_norm_history = []
     sat_history = []
     fnr_history = []
+    tnp_history = []
+    sr_history = []
     for k in range(steps):
         params_gd, value, g_norm = gd_step(params_gd, lr)
 
@@ -142,23 +142,44 @@ def gradient_descent(
             sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
             sat_history.append(sat_rate)
 
-            # Compare cells to ground truth and compute FNR
+            # Compare cells to ground truth validation
             ground_truth_reference = mct.check_ground_truth_fast(x1_params, x2_params, x_domain, gt_reach_regions)
             checked_sat_states = set(sat_states)
             true_sat_states = {s for s, v in ground_truth_reference.items() if v == 'goal'}
+
+            # Compute sat coverage in ground truth
+            gt_sat_states = {s for s, v in gt_reach_regions.items() if v in ['goal']}
+            gt_coverage = len(gt_sat_states) / len(gt_reach_regions)
+
+            # Compute sat coverage of abstract states (% of area covered by sat states); compare to gt
+            sat_coverage = mct.compute_sat_coverage(sat_states, x1_params, x2_params)
+            sr = sat_coverage / gt_coverage
+            sr_history.append(sr)
+
+            # Compute the proportion of true negative states
+            true_negative_states = {s for s, v in gt_reach_regions.items() if v == 'unk' or v == 'fail'}
+            num_true_negatives = len(true_negative_states)
+            tnp = num_true_negatives / len(gt_reach_regions)
+            tnp_history.append(tnp)
+
+            # Compute FNR
             fnr, _ = mct.false_negative_rate(true_sat_states, checked_sat_states)
             fnr_history.append(fnr)
         
         if k % print_every == 0:
             if do_verify and k % record_every == 0:
-                print(f"[{k}] J(p)={float(value):.3f}, |∇J(p)|={float(g_norm):.3f}, Sat rate: {sat_rate*100.0:.2f}%, FNR: {fnr:.4f}")
+                print(f"[{k}] J(p)={float(value):.3f}, |∇J(p)|={float(g_norm):.3f}")
+                print(f"      Sat rate: {sat_rate*100.0:.2f}%, SR: {sr*100.0:.2f}")
+                print(f"      FNR: {fnr*100.0:.2f}%, TNP: {tnp*100.0:.2f}")
             else:
                 print(f"[{k}] J(p)={float(value):.3f}, |∇J(p)|={float(g_norm):.3f}")
 
-    return params_gd, np.array(cost_history), np.array(grad_norm_history), np.array(sat_history), np.array(fnr_history)
+    return params_gd, np.array(cost_history), np.array(grad_norm_history), np.array(sat_history), np.array(sr_history), np.array(tnp_history), np.array(fnr_history)
 
 
 if __name__ == "__main__":
+
+    start_cpu = time.process_time()
     
     # Define the X-domain
     x1_min, x1_max = -1.2, 0.6
@@ -172,8 +193,8 @@ if __name__ == "__main__":
     #     print(state)
 
     # Initial tessellation parameters
-    n1_internal = 80
-    n2_internal = 80
+    n1_internal = 60
+    n2_internal = 60
     sigma_u = 0.5
     key = jax.random.PRNGKey(0)
     u1 = jnp.zeros((n1_internal,))  # initial uniform spacing
@@ -187,53 +208,73 @@ if __name__ == "__main__":
 
     params = jnp.concatenate([u1, u2])
 
-    # Compute initial objective and gradient
-    val, grad = jax.value_and_grad(mot.image_area)(
-        params,
-        x_domain=x_domain,
-        n1_internal=n1_internal,
-        n2_internal=n2_internal,
-    )
-    print(f"Initial objective value: {val:.4f}")
-    print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
+    # # Compute initial objective and gradient
+    # val, grad = jax.value_and_grad(mot.image_area)(
+    #     params,
+    #     x_domain=x_domain,
+    #     n1_internal=n1_internal,
+    #     n2_internal=n2_internal,
+    # )
+    # print(f"Initial objective value: {val:.4f}")
+    # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
 
-    # Make Kripke structure and model check
-    x1_params, x2_params = mot.extract_grid_params(
-        params,
-        n1_internal=n1_internal,
-        n2_internal=n2_internal,
-        x1_min=x1_min,
-        x1_max=x1_max,
-        x2_min=x2_min,
-        x2_max=x2_max,
-    )
-    kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=False, advanced_metrics=True, verbose=True)
-    sat_states = mct.model_check_kripke(kripke_structure)
-    sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
-    print(f"Sat rate: {sat_rate*100.0:.2f}%")
+    # # Make Kripke structure and model check
+    # x1_params, x2_params = mot.extract_grid_params(
+    #     params,
+    #     n1_internal=n1_internal,
+    #     n2_internal=n2_internal,
+    #     x1_min=x1_min,
+    #     x1_max=x1_max,
+    #     x2_min=x2_min,
+    #     x2_max=x2_max,
+    # )
+    # kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=False, advanced_metrics=True, verbose=True)
+    # sat_states = mct.model_check_kripke(kripke_structure)
+    # sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
+    # print(f"Sat rate: {sat_rate*100.0:.2f}%")
 
-    # gt_reach_regions = mct.get_gt_reach_regions(x_domain, grid_resolution=10)
+    #  # Compare against ground truth safety
+    # gt_reach_regions = mct.get_gt_reach_regions(x_domain, grid_resolution=100)
     # ground_truth_reference = mct.check_ground_truth_fast(x1_params, x2_params, x_domain, gt_reach_regions)
     # checked_sat_states = set(sat_states)
     # true_sat_states = {s for s, v in ground_truth_reference.items() if v == 'goal'}
+
+    # # Compute sat coverage in ground truth
+    # gt_sat_states = {s for s, v in gt_reach_regions.items() if v in ['goal']}
+    # gt_coverage = len(gt_sat_states) / len(gt_reach_regions)
+
+    # # Compute sat coverage of abstract states (% of area covered by sat states); compare to gt
+    # sat_coverage = mct.compute_sat_coverage(sat_states, x1_params, x2_params)
+    # coverage_proportion = sat_coverage / gt_coverage
+    # print(f"Coverage proportion: {coverage_proportion*100:.2f}%")
+
+    # # Compute FNR
     # fnr, _ = mct.false_negative_rate(true_sat_states, checked_sat_states)
-    # print(fnr)
+    # print(f"False Negative Rate (FNR): {fnr:.4f}")
+
+    # # Compute the proportion of true negative states
+    # true_negative_states = {s for s, v in gt_reach_regions.items() if v == 'unk' or v == 'fail'}
+    # num_true_negatives = len(true_negative_states)
+    # tnp = num_true_negatives / len(gt_reach_regions)
+    # print(f"Proportion of True Negative States: {tnp*100.0:.2f}%")
 
 
-    plot_grid_sat_map(
-        x1_params,
-        x2_params,
-        sat_states,
-        x_domain=x_domain,
-        out_path="mountaincar_init.png",
-        show=True,
-    )
+
+    # plot_grid_sat_map(
+    #     x1_params,
+    #     x2_params,
+    #     sat_states,
+    #     x_domain=x_domain,
+    #     out_path="mountaincar_init.png",
+    #     show=True,
+    # )
+
 
 
 
     # Optimize params
-    params_opt, cost_history, grad_norm_history, sat_history, fnr_history = gradient_descent(
+    params_opt, cost_history, grad_norm_history, sat_history, sr_history, tnp_history, fnr_history = gradient_descent(
         params,
         mot.image_area,
         x_domain=x_domain,
@@ -246,8 +287,18 @@ if __name__ == "__main__":
         record_every=10,
         do_verify=False,)
     
-
-
+    # # Save the training history
+    # results = {
+    #     "params": params_opt,
+    #     "cost_history": cost_history,
+    #     "grad_norm_history": grad_norm_history,
+    #     "sat_history": sat_history,
+    #     "sr_history": sr_history,
+    #     "tnp_history": tnp_history,
+    #     "fnr_history": fnr_history,
+    # }
+    # with open("mountaincar_training_history.pkl", "wb") as f:
+    #     pkl.dump(results, f)
 
 
     # Make Kripke structure and model check
@@ -261,9 +312,39 @@ if __name__ == "__main__":
         x2_max=x2_max,
     )
     kripke_structure = mct.make_kripke(x1_params, x2_params, allow_self_loops=False, advanced_metrics=True, verbose=True)
+
+    end_cpu = time.process_time()
+    cpu_time = end_cpu - start_cpu
+    print(f"Model build CPU time (s): {cpu_time:.2f}")
+
     sat_states = mct.model_check_kripke(kripke_structure)
     sat_rate = len(sat_states)/((n1_internal+1) * (n2_internal+1))
     print(f"Sat rate: {sat_rate*100.0:.2f}%")
+
+    # Compare against ground truth safety
+    gt_reach_regions = mct.get_gt_reach_regions(x_domain, grid_resolution=100)
+    ground_truth_reference = mct.check_ground_truth_fast(x1_params, x2_params, x_domain, gt_reach_regions)
+    checked_sat_states = set(sat_states)
+    true_sat_states = {s for s, v in ground_truth_reference.items() if v == 'goal'}
+
+    # Compute sat coverage in ground truth
+    gt_sat_states = {s for s, v in gt_reach_regions.items() if v in ['goal']}
+    gt_coverage = len(gt_sat_states) / len(gt_reach_regions)
+
+    # Compute sat coverage of abstract states (% of area covered by sat states); compare to gt
+    sat_coverage = mct.compute_sat_coverage(sat_states, x1_params, x2_params)
+    coverage_proportion = sat_coverage / gt_coverage
+    print(f"Coverage proportion: {coverage_proportion*100:.2f}%")
+
+    # Compute FNR
+    fnr, _ = mct.false_negative_rate(true_sat_states, checked_sat_states)
+    print(f"False Negative Rate (FNR): {fnr:.4f}")
+
+    # Compute the proportion of true negative states
+    true_negative_states = {s for s, v in gt_reach_regions.items() if v == 'unk' or v == 'fail'}
+    num_true_negatives = len(true_negative_states)
+    tnp = num_true_negatives / len(gt_reach_regions)
+    print(f"Proportion of True Negative States: {tnp*100.0:.2f}%")
 
     # Compare cells to ground truth and compute FNR
     gt_reach_regions = mct.get_gt_reach_regions(x_domain, grid_resolution=10)
@@ -273,14 +354,14 @@ if __name__ == "__main__":
     fnr, _ = mct.false_negative_rate(true_sat_states, checked_sat_states)
 
 
-    plot_grid_sat_map(
-        x1_params,
-        x2_params,
-        sat_states,
-        x_domain=x_domain,
-        out_path="mountaincar_final.png",
-        show=True,
-    )
+    # plot_grid_sat_map(
+    #     x1_params,
+    #     x2_params,
+    #     sat_states,
+    #     x_domain=x_domain,
+    #     out_path="mountaincar_final.png",
+    #     show=True,
+    # )
 
 
 

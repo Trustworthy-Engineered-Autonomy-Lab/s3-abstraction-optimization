@@ -13,6 +13,44 @@ def wrap_to_pi(angle):
     angle = jnp.asarray(angle)
     return (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi
 
+
+def theta_min_arc_length(thetas, *, eps=1e-12):
+    """Length of the minimal circular arc covering thetas.
+
+    Angles live on S^1. Using raw min/max after wrapping can incorrectly
+    produce near-2*pi spans when samples straddle the -pi/pi cut.
+
+    Args:
+        thetas: array-like with samples along the last axis.
+        eps: numerical tolerance.
+
+    Returns:
+        Array of arc lengths with shape thetas.shape[:-1].
+    """
+
+    th = wrap_to_pi(thetas)
+    two_pi = jnp.asarray(2.0 * jnp.pi, dtype=th.dtype)
+    eps = jnp.asarray(eps, dtype=th.dtype)
+
+    # Map to [0, 2pi) and sort for stable circular gap computation.
+    u = jnp.sort(th + jnp.pi, axis=-1)
+    n = u.shape[-1]
+
+    # Largest gap between consecutive points on the circle.
+    u_ext = jnp.concatenate([u, u[..., :1] + two_pi], axis=-1)
+    gaps = jnp.diff(u_ext, axis=-1)
+    k = jnp.argmax(gaps, axis=-1)
+
+    start_idx = (k + 1) % n
+    end_idx = k
+    start_u = jnp.take_along_axis(u, start_idx[..., None], axis=-1)[..., 0]
+    end_u = jnp.take_along_axis(u, end_idx[..., None], axis=-1)[..., 0]
+
+    # Complement of the largest gap.
+    arc_len = jnp.mod(end_u - start_u, two_pi)
+    arc_len = jnp.where(arc_len >= two_pi - eps, two_pi, arc_len)
+    return arc_len
+
 def unicycle_dynamics(state, control, control_bound = np.pi/4):
 
     state = jnp.asarray(state)
@@ -121,6 +159,20 @@ def cl_unicycle_dynamics(state):
     return unicycle_dynamics(state, control_input)
 
 
+def simulate_trajectory(x0, *, steps=250, goal_center=None, goal_radius=None):
+    """Roll out the closed-loop unicycle from x0. Returns array [T, 3]."""
+    state = jnp.array(x0, dtype=float)
+    traj = [state.copy()]
+    for _ in range(steps):
+        state = cl_unicycle_dynamics(state)
+        traj.append(state.copy())
+
+        if (goal_center is not None) and (goal_radius is not None):
+            if np.linalg.norm(state[:2] - goal_center) <= goal_radius:
+                break
+    return jnp.array(traj)
+
+
 ''' Objective functions and helpers '''
 
 # Compute sum of image AABB volume
@@ -194,9 +246,8 @@ def image_volume(
     x1_hi_post = jnp.max(x1, axis=-1)
     x2_lo_post = jnp.min(x2, axis=-1)
     x2_hi_post = jnp.max(x2, axis=-1)
-    x3_lo_post = jnp.min(x3, axis=-1)
-    x3_hi_post = jnp.max(x3, axis=-1)
-    img_volume = (x1_hi_post - x1_lo_post) * (x2_hi_post - x2_lo_post) * (x3_hi_post - x3_lo_post)
+    theta_span = theta_min_arc_length(x3)
+    img_volume = (x1_hi_post - x1_lo_post) * (x2_hi_post - x2_lo_post) * theta_span
 
     return jnp.sum(img_volume)
 
@@ -274,9 +325,8 @@ def image_volume_over_parent(
     x1_hi_post = jnp.max(x1_post, axis=-1)
     x2_lo_post = jnp.min(x2_post, axis=-1)
     x2_hi_post = jnp.max(x2_post, axis=-1)
-    x3_lo_post = jnp.min(x3_post, axis=-1)
-    x3_hi_post = jnp.max(x3_post, axis=-1)
-    img_volume = (x1_hi_post - x1_lo_post) * (x2_hi_post - x2_lo_post) * (x3_hi_post - x3_lo_post)
+    theta_span = theta_min_arc_length(x3_post)
+    img_volume = (x1_hi_post - x1_lo_post) * (x2_hi_post - x2_lo_post) * theta_span
 
     ratio = img_volume / (parent_volume + 1e-12)
     return jnp.sum(ratio)
