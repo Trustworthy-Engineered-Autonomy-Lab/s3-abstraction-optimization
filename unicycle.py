@@ -180,9 +180,9 @@ if __name__ == "__main__":
     domain = (x_min, x_max, y_min, y_max, theta_min, theta_max)
 
     # Example grid parameters
-    num_x_params = 100
-    num_y_params = 100
-    num_theta_params = 100
+    num_x_params = 60
+    num_y_params = 60
+    num_theta_params = 60
     key = jax.random.PRNGKey(0)
     sigma_u = 1.0
     # u1 = jnp.zeros((num_x_params,))  # initial uniform spacing
@@ -247,7 +247,7 @@ if __name__ == "__main__":
     # Gradient descent to optimize grid
     params_opt, cost_history, grad_norm_history = gradient_descent(
         params,
-        uot.image_volume,
+        uot.image_volume_over_parent,
         domain=domain,
         n1_internal=num_x_params,
         n2_internal=num_y_params,
@@ -275,7 +275,7 @@ if __name__ == "__main__":
 
     # Make the kripke structure; check LTL property
     x_params, y_params, theta_params = uot.extract_grid_params(
-        params,
+        params_opt,
         n1_internal=num_x_params,
         n2_internal=num_y_params,
         n3_internal=num_theta_params,
