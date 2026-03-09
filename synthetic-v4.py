@@ -125,8 +125,8 @@ if __name__ == "__main__":
     radius = 2.0
 
     # Initial tessellation parameters
-    n1_internal = 100
-    n2_internal = 100
+    n1_internal = 90
+    n2_internal = 90
     sigma_u = 2.0
     key = jax.random.PRNGKey(0)
     key, k_u1, k_u2 = jax.random.split(key, 3)

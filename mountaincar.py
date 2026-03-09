@@ -193,8 +193,8 @@ if __name__ == "__main__":
     #     print(state)
 
     # Initial tessellation parameters
-    n1_internal = 60
-    n2_internal = 60
+    n1_internal = 90
+    n2_internal = 90
     sigma_u = 0.5
     key = jax.random.PRNGKey(0)
     u1 = jnp.zeros((n1_internal,))  # initial uniform spacing

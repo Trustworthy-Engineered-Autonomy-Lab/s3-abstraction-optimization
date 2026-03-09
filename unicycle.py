@@ -180,9 +180,9 @@ if __name__ == "__main__":
     domain = (x_min, x_max, y_min, y_max, theta_min, theta_max)
 
     # Example grid parameters
-    num_x_params = 60
-    num_y_params = 60
-    num_theta_params = 60
+    num_x_params = 90
+    num_y_params = 90
+    num_theta_params = 90
     key = jax.random.PRNGKey(0)
     sigma_u = 1.0
     # u1 = jnp.zeros((num_x_params,))  # initial uniform spacing
@@ -270,8 +270,8 @@ if __name__ == "__main__":
         domain=domain,
     )
 
-    plot_optimized_grid_params(x_params, y_params, theta_params, domain=domain)
-    plt.show()
+    # plot_optimized_grid_params(x_params, y_params, theta_params, domain=domain)
+    # plt.show()
 
     # Make the kripke structure; check LTL property
     x_params, y_params, theta_params = uot.extract_grid_params(
