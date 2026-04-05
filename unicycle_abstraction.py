@@ -10,6 +10,7 @@
 import unicycle_system as us
 import pyModelChecking as pmc
 import numpy as np
+from itertools import product
 
 
 # =====================================================================
@@ -56,6 +57,7 @@ def build_abstraction(
     
     # Iterate over cells and determine successors w/Taylor reachability
     print("Starting abstraction construction...")
+    num_states_iterated = 0
     for i in range(nstates_1):
         x_lo, x_hi = x_edges[i], x_edges[i+1]
         for j in range(nstates_2):
@@ -66,51 +68,40 @@ def build_abstraction(
                 # Specify cell domain and corners
                 lower_bounds = np.array([x_lo, y_lo, theta_lo])
                 upper_bounds = np.array([x_hi, y_hi, theta_hi])
-                verts = np.array([
-                    [x_lo, y_lo, theta_lo],
-                    [x_lo, y_hi, theta_lo],
-                    [x_hi, y_hi, theta_lo],
-                    [x_hi, y_lo, theta_lo],
-                    [x_lo, y_lo, theta_hi],
-                    [x_lo, y_hi, theta_hi],
-                    [x_hi, y_hi, theta_hi],
-                    [x_hi, y_lo, theta_hi],
-                ])
-
-                # Determine Lagrange error bounds on linear approximation
-                error_bounds = us.lagrange_error_bounds(lower_bounds,
-                                                     upper_bounds,
-                                                     resolution=hessian_grid_resolution)
+                all_verts = [list(combo) for combo in product(*zip(lower_bounds, upper_bounds))]
+                all_verts = np.array(all_verts)
 
                 # Determine label of current cell
-                if is_goal_state(verts, center=goal_center, radius=goal_radius):
+                if is_goal_state(all_verts, center=goal_center, radius=goal_radius):
                     label = ['goal']
-                elif is_obs_state(verts, center=obs_center, radius=obs_radius):
+                elif is_obs_state(all_verts, center=obs_center, radius=obs_radius):
                     label = ['fail']
                 else:
                     label = ['safe']
 
-                # Compute cell centroid and evaluate Jacobian there; compute post-image
+                # Compute cell centroid and evaluate Jacobian there; compute post-image AABB
                 centroid = (lower_bounds + upper_bounds) / 2.0
                 J = us.jacobian(centroid)
-                next_verts = np.array([us.linear_cl_system(vert, centroid, J=J) for vert in verts])
+                next_lower_bounds = np.array(us.linear_cl_system(lower_bounds, centroid, J=J))
+                next_upper_bounds = np.array(us.linear_cl_system(upper_bounds, centroid, J=J))
 
-                # Inflate post-image vertices by Lagrange error bounds to ensure coverage
-                next_verts_lo = next_verts - error_bounds
-                next_verts_hi = next_verts + error_bounds
-                print(next_verts_lo)
-                print(next_verts_hi)
-
-                KeyboardInterrupt
+                # Determine Lagrange error bounds and compute Hammard product of AABB
+                error_bounds = us.lagrange_error_bounds(lower_bounds,
+                                                        upper_bounds,
+                                                        resolution=hessian_grid_resolution)
+                next_lower_bounds -= error_bounds
+                next_upper_bounds += error_bounds
+                all_next_verts = [list(combo) for combo in product(*zip(next_lower_bounds, next_upper_bounds))]
+                all_next_verts = np.array(all_next_verts)
 
                 # Compute theta image interval(s) using minimal circular arc.
-                theta_intervals = theta_min_arc_intervals([next_verts_lo[2], next_verts_hi[2]])
+                theta_intervals = theta_min_arc_intervals(all_next_verts[:, 2])
 
                 # Identify successor cells
-                x_min = next_verts_lo[0]
-                x_max = next_verts_hi[0]
-                y_min = next_verts_lo[1]
-                y_max = next_verts_hi[1]
+                x_min = next_lower_bounds[0]
+                x_max = next_upper_bounds[0]
+                y_min = next_lower_bounds[1]
+                y_max = next_upper_bounds[1]
                 succ_cells_set = set()
                 for (theta_min, theta_max) in theta_intervals:
                     succ_cells_set.update(
@@ -129,7 +120,7 @@ def build_abstraction(
                 succ_cells = list(succ_cells_set)
                 
                 # Indicate if any successor goes out of bounds
-                hits_oob = is_oob_state(np.stack([next_verts_lo, next_verts_hi]),
+                hits_oob = is_oob_state(np.stack([next_lower_bounds, next_upper_bounds]),
                                         x_bounds=(x_edges[0], x_edges[-1]),
                                         y_bounds=(y_edges[0], y_edges[-1]))
 
@@ -140,20 +131,16 @@ def build_abstraction(
                     edge = (src, dst)
                     if edge not in kripke_transitions:
                         kripke_transitions.add(edge)
-                        succ_count += 1
-                        if dst == src:
-                            self_loop_count += 1
                 if hits_oob:
                     edge = (src, oob_state_id)
                     if edge not in kripke_transitions:
                         kripke_transitions.add(edge)  # transitions oob
-                        succ_count += 1
 
                 kripke_labels[src] = label
                 # print(f"{src}: {label[0]} cell ({i},{j},{k}) -> {len(succ_cells)} in-grid successors")
-                if count % 100 == 0:
-                    print(f"    > Built relations for {count} / {n_kripke_states - 1} states...")
-                count += 1
+                if num_states_iterated % 10 == 0:
+                    print(f"    > Built relations for {num_states_iterated} / {n_kripke_states - 1} states...")
+                num_states_iterated += 1
 
     # Label the out-of-bounds state; add self-loop
     kripke_labels[oob_state_id] = ['fail']
@@ -353,6 +340,7 @@ def theta_min_arc_intervals(
     lo2, hi2 = -np.pi, (end_u2 - two_pi) - np.pi
     return [(float(lo2), float(hi2)), (float(lo1), float(hi1))]
 
+
 # =====================================================================
 # Section for testing the above methods
 # =====================================================================
@@ -363,6 +351,6 @@ if __name__ == "__main__":
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([5.0, 4.0, -np.pi])
 
-    build_abstraction(abstraction_shape,
-                      domain_lb,
-                      domain_ub)
+    kripke_structure = build_abstraction(abstraction_shape,
+                                         domain_lb,
+                                         domain_ub)
