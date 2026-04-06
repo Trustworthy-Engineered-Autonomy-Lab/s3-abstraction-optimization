@@ -7,10 +7,17 @@
 # =====================================================================
 # Libraries for the unicycle system
 # =====================================================================
-import unicycle_system as us
+# import os
+# os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+# os.environ.setdefault('MKL_NUM_THREADS', '1')
+# os.environ.setdefault('OMP_NUM_THREADS', '1')
+
+import unicycle_system_sympy as uss
 import pyModelChecking as pmc
 import numpy as np
 from itertools import product
+import pickle as pkl
+import time
 
 
 # =====================================================================
@@ -58,6 +65,8 @@ def build_abstraction(
     # Iterate over cells and determine successors w/Taylor reachability
     print("Starting abstraction construction...")
     num_states_iterated = 0
+    total_states = n_kripke_states - 1
+    start_time = time.time()
     for i in range(nstates_1):
         x_lo, x_hi = x_edges[i], x_edges[i+1]
         for j in range(nstates_2):
@@ -81,12 +90,12 @@ def build_abstraction(
 
                 # Compute cell centroid and evaluate Jacobian there; compute post-image AABB
                 centroid = (lower_bounds + upper_bounds) / 2.0
-                J = us.jacobian(centroid)
-                next_lower_bounds = np.array(us.linear_cl_system(lower_bounds, centroid, J=J))
-                next_upper_bounds = np.array(us.linear_cl_system(upper_bounds, centroid, J=J))
+                # J = uss.jacobian(centroid) # might be marginally faster to precompute J?
+                next_lower_bounds = uss.linear_cl_system(lower_bounds, centroid)
+                next_upper_bounds = uss.linear_cl_system(upper_bounds, centroid)
 
                 # Determine Lagrange error bounds and compute Hammard product of AABB
-                error_bounds = us.lagrange_error_bounds(lower_bounds,
+                error_bounds = uss.lagrange_error_bounds(lower_bounds,
                                                         upper_bounds,
                                                         resolution=hessian_grid_resolution)
                 next_lower_bounds -= error_bounds
@@ -137,9 +146,17 @@ def build_abstraction(
                         kripke_transitions.add(edge)  # transitions oob
 
                 kripke_labels[src] = label
-                # print(f"{src}: {label[0]} cell ({i},{j},{k}) -> {len(succ_cells)} in-grid successors")
-                if num_states_iterated % 10 == 0:
-                    print(f"    > Built relations for {num_states_iterated} / {n_kripke_states - 1} states...")
+                if num_states_iterated % 1 == 0:
+                    elapsed = time.time() - start_time
+                    if num_states_iterated > 0:
+                        rate = num_states_iterated / elapsed
+                        remaining = (total_states - num_states_iterated) / rate
+                        print(f"    > {num_states_iterated} / {total_states} states "
+                              f"| elapsed: {elapsed:.1f}s "
+                              f"| ETA: {remaining:.1f}s")
+                    else:
+                        print(f"    > {num_states_iterated} / {total_states} states "
+                              f"| elapsed: {elapsed:.1f}s")
                 num_states_iterated += 1
 
     # Label the out-of-bounds state; add self-loop
@@ -156,7 +173,13 @@ def build_abstraction(
                                   R=list(kripke_transitions),
                                   L=kripke_labels)
     
-    return kripke_structure
+    # Output as dictionary
+    kripke_components = {
+        'kripke_states': kripke_states,
+        'kripke_transitions': kripke_transitions,
+        'kripke_labels': kripke_labels}
+    
+    return kripke_structure, kripke_components
 
 def intersecting_cells_from_aabb(
         x_params,
@@ -281,10 +304,15 @@ def is_oob_state(
     return False
 
 
-
 # =====================================================================
 # Helper functions
 # =====================================================================
+
+
+def wrap_to_pi(angle):
+    angle = np.asarray(angle)
+    return (angle + np.pi) % (2 * np.pi) - np.pi
+
 
 def theta_min_arc_intervals(
         thetas,
@@ -306,7 +334,7 @@ def theta_min_arc_intervals(
         return [(-np.pi, np.pi)]
 
     # Wrap to [-pi, pi)
-    th = us.wrap_to_pi(th)
+    th = wrap_to_pi(th)
 
     if th.size == 1:
         v = float(th[0])
@@ -347,10 +375,12 @@ def theta_min_arc_intervals(
 
 if __name__ == "__main__":
 
-    abstraction_shape = [10, 10, 10]
+    abstraction_shape = [50, 50, 50]
     domain_lb = np.array([0.0, 0.0, -np.pi])
-    domain_ub = np.array([5.0, 4.0, -np.pi])
+    domain_ub = np.array([50.0, 40.0, np.pi])
 
-    kripke_structure = build_abstraction(abstraction_shape,
-                                         domain_lb,
-                                         domain_ub)
+    _, kripke_components = build_abstraction(abstraction_shape, domain_lb, domain_ub)
+
+    # Save the Kripke structure components for later use
+    with open("kripke_components.pkl", "wb") as f:
+        pkl.dump(kripke_components, f)

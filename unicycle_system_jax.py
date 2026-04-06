@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from itertools import product
+import time
 
 
 # =====================================================================
@@ -230,9 +231,18 @@ def wrap_to_pi(angle):
 
 if __name__ == "__main__":
 
-    lower_bounds = jnp.array([0.0, 0.0, 0.0])
-    upper_bounds = jnp.array([1.0, 1.0, jnp.pi/16])
+    start_cpu = time.process_time()
 
-    error_bounds = lagrange_error_bounds(lower_bounds, upper_bounds, resolution=20)
+    lower_bounds = np.array([-1.0,-1.0, -0.1])
+    upper_bounds = np.array([1.0, 1.0, 0.1])
+
+    error_bounds = lagrange_error_bounds(
+        lower_bounds=lower_bounds,
+        upper_bounds=upper_bounds,
+        resolution=10)
     print(error_bounds)
 
+
+    end_cpu = time.process_time()
+
+    print(f"elapsed time: {end_cpu - start_cpu:.4f} seconds")
