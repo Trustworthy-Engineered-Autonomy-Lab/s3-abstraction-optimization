@@ -61,6 +61,9 @@ def build_abstraction(
     x_edges = np.linspace(domain_lb[0], domain_ub[0], nstates_1 + 1)
     y_edges = np.linspace(domain_lb[1], domain_ub[1], nstates_2 + 1)
     theta_edges = np.linspace(domain_lb[2], domain_ub[2], nstates_3 + 1)
+
+    # Pre-comput Lagrange error bounds in batches for efficiency
+    error_bounds = uss.lagrange_error_bounds_grid(x_edges, y_edges, theta_edges)
     
     # Iterate over cells and determine successors w/Taylor reachability
     print("Starting abstraction construction...")
@@ -95,11 +98,9 @@ def build_abstraction(
                 next_upper_bounds = uss.linear_cl_system(upper_bounds, centroid)
 
                 # Determine Lagrange error bounds and compute Hammard product of AABB
-                error_bounds = uss.lagrange_error_bounds(lower_bounds,
-                                                        upper_bounds,
-                                                        resolution=hessian_grid_resolution)
-                next_lower_bounds -= error_bounds
-                next_upper_bounds += error_bounds
+                error_bound = error_bounds[i, j, k, :]
+                next_lower_bounds -= error_bound
+                next_upper_bounds += error_bound
                 all_next_verts = [list(combo) for combo in product(*zip(next_lower_bounds, next_upper_bounds))]
                 all_next_verts = np.array(all_next_verts)
 
@@ -146,7 +147,7 @@ def build_abstraction(
                         kripke_transitions.add(edge)  # transitions oob
 
                 kripke_labels[src] = label
-                if num_states_iterated % 1 == 0:
+                if num_states_iterated % 1000 == 0:
                     elapsed = time.time() - start_time
                     if num_states_iterated > 0:
                         rate = num_states_iterated / elapsed

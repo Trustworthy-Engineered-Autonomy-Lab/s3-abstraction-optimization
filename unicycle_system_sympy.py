@@ -162,7 +162,8 @@ def _derive_symbolic_derivatives():
     print("[USS] Running CSE on Jacobian...")
     J_cse = sp.cse(list(J_sym), optimizations='basic')   # (substitutions, reduced)
     print("[USS] Running CSE on Hessian...")
-    H_cse = sp.cse(list(H_sym), optimizations='basic')
+    H_flat = [H_sym[i, j, k] for i in range(n) for j in range(n) for k in range(n)]
+    H_cse = sp.cse(H_flat, optimizations='basic')
 
     print(f"[USS] Done ({time.perf_counter() - _t0:.2f}s).", flush=True)
 
@@ -187,6 +188,7 @@ def _build_funcs_from_cse(state_vars, cse_data, output_shape=None):
     cse_vars  = [s for s, _ in substitutions]
     cse_exprs = [e for _, e in substitutions]
     all_args  = list(state_vars) + cse_vars
+    n_flat    = len(reduced_exprs)
 
     cse_funcs = []
     for i, ex in enumerate(cse_exprs):
@@ -199,9 +201,28 @@ def _build_funcs_from_cse(state_vars, cse_data, output_shape=None):
         env = list(vals)
         for f in cse_funcs:
             env.append(f(*env))
-        result = np.array(out_func(*env), dtype=float)
-        if output_shape is not None:
-            result = result.reshape(output_shape)
+
+        raw = out_func(*env)   # list of n_flat scalars OR list of n_flat arrays
+
+        # Detect batched (vector) vs scalar call from the *inputs*, not outputs.
+        # Some output entries may be constants (ndim==0) even in batched mode
+        # (e.g. second derivatives of linear terms), so checking raw[0] is unreliable.
+        is_batched = vals and np.ndim(vals[0]) > 0
+        if not is_batched:
+            # Scalar input: raw is [scalar, scalar, ...]
+            result = np.array([float(r) for r in raw], dtype=float)  # (n_flat,)
+            if output_shape is not None:
+                result = result.reshape(output_shape)
+        else:
+            # Batched input: raw is [array(N,) or scalar, ...]
+            # Scalar constants broadcast automatically via assignment.
+            N = len(vals[0])
+            result = np.empty((N, n_flat), dtype=float)
+            for k, arr in enumerate(raw):
+                result[:, k] = arr                      # (N, n_flat)
+            if output_shape is not None:
+                result = result.reshape((N,) + output_shape)
+
         return result
 
     return fast_eval
@@ -272,7 +293,7 @@ def linear_cl_system(state, center, *, J=None):
     return J @ (state - center) + f_center
 
 
-def sup_hessian_norms(lower_bounds, upper_bounds, *, resolution=50):
+def sup_hessian_norms(lower_bounds, upper_bounds, *, resolution=10):
     """
     Approximates the supremum of the spectral norms of the Hessian over a range
     """
@@ -286,9 +307,8 @@ def sup_hessian_norms(lower_bounds, upper_bounds, *, resolution=50):
 
     # Compute spectral norm for all i at once
     def all_spectral_norms(H):
-        # H is (n, n, n); H[:, :, i] is the ith Hessian matrix
-        Hi_stack = np.moveaxis(H, -1, 0)           # (n, n, n)
-        eigvals  = np.linalg.eigvalsh(Hi_stack)    # (n, n) eigenvalues
+        # H is (n, n, n); H[i, :, :] is the Hessian matrix of the i-th output
+        eigvals = np.linalg.eigvalsh(H)            # (n, n) eigenvalues
         return np.max(np.abs(eigvals), axis=-1)    # (n,) spectral norms
 
     # Vectorize over grid points: (N, n)
@@ -298,7 +318,7 @@ def sup_hessian_norms(lower_bounds, upper_bounds, *, resolution=50):
     return np.max(all_norms, axis=0)
 
 
-def lagrange_error_bounds(lower_bounds, upper_bounds, *, resolution=50):
+def lagrange_error_bounds(lower_bounds, upper_bounds, *, resolution=10):
     """
     Computes the Lagrange error bound for the linear approximation of the
     closed-loop system
@@ -318,28 +338,110 @@ def lagrange_error_bounds(lower_bounds, upper_bounds, *, resolution=50):
     return 0.5 * sup_norms * (max_displacement ** 2)
 
 
+def _hessian_vectorized(px, py, th):
+    """
+    px, py, th: 1D arrays of length N
+    returns: (N, 3, 3, 3)
+    """
+    return _H_FUNC(px, py, th)
+
+
+def lagrange_error_bounds_grid(x_edges, y_edges, theta_edges, *, resolution=10):
+    """
+    Computes Lagrange error bounds for all cells in a 3D grid in one vectorized pass.
+    Returns: error_bounds array of shape (Nx-1, Ny-1, Ntheta-1, 3)
+    """
+
+    Nx = len(x_edges) - 1
+    Ny = len(y_edges) - 1
+    Nt = len(theta_edges) - 1
+
+    # --- Build all cell centroids and half-diagonals upfront ---
+    x_lo, x_hi       = x_edges[:-1], x_edges[1:]
+    y_lo, y_hi       = y_edges[:-1], y_edges[1:]
+    t_lo, t_hi       = theta_edges[:-1], theta_edges[1:]
+
+    # Cell centroids: (Nx, Ny, Nt, 3)
+    cx = (x_lo[:, None, None] + x_hi[:, None, None]) / 2
+    cy = (y_lo[None, :, None] + y_hi[None, :, None]) / 2
+    ct = (t_lo[None, None, :] + t_hi[None, None, :]) / 2
+
+    # Max displacement from centroid to corner (same for all cells if uniform)
+    dx = (x_hi - x_lo)[:, None, None] / 2
+    dy = (y_hi - y_lo)[None, :, None] / 2
+    dt = (t_hi - t_lo)[None, None, :] / 2
+    max_disp = np.sqrt(dx**2 + dy**2 + dt**2)  # (Nx, Ny, Nt)
+
+    # --- Sample sup Hessian norm per cell ---
+    # For small cells with resolution=10, sample around centroid ± half-width
+    # We do ONE batched Hessian evaluation over all centroids (fast approximation)
+    # For tighter bounds, increase resolution here.
+    
+    # cx/cy/ct have shapes (Nx,1,1), (1,Ny,1), (1,1,Nt) — must broadcast to full grid first
+    CX = np.broadcast_to(cx, (Nx, Ny, Nt))
+    CY = np.broadcast_to(cy, (Nx, Ny, Nt))
+    CT = np.broadcast_to(ct, (Nx, Ny, Nt))
+    centroids = np.stack([CX.ravel(), CY.ravel(), CT.ravel()], axis=-1)  # (N, 3)
+
+    # Evaluate Hessian at all centroids in one vectorized call
+    # H_all: (N, 3, 3, 3)
+    px_arr  = centroids[:, 0]
+    py_arr  = centroids[:, 1]
+    th_arr  = centroids[:, 2]
+
+    # Vectorized hessian over the full batch
+    H_all = _hessian_vectorized(px_arr, py_arr, th_arr)  # (N, 3, 3, 3)
+
+    # Spectral norm per output dimension: max |eigenvalue| of H[i,:,:] for each i
+    # H_all[:,i,:,:] is the (3,3) Hessian of the i-th output
+    sup_norms = np.zeros((len(centroids), 3))
+    for i in range(3):
+        Hi = H_all[:, i, :, :]                          # (N, 3, 3)
+        eigvals = np.linalg.eigvalsh(Hi)                 # (N, 3)
+        sup_norms[:, i] = np.max(np.abs(eigvals), axis=-1)  # (N,)
+
+    sup_norms = sup_norms.reshape(Nx, Ny, Nt, 3)        # (Nx, Ny, Nt, 3)
+
+    # Lagrange bound: (1/2) * M * r^2
+    error_bounds = 0.5 * sup_norms * max_disp[..., None] ** 2  # (Nx, Ny, Nt, 3)
+
+    return error_bounds
+
+
 # =====================================================================
 # Section for testing the above methods
 # =====================================================================
 
 if __name__ == "__main__":
 
-    state = np.array([10.0, 10.0, 0.0])
+    num_x_intervals = 100
+    num_y_intervals = 100
+    num_theta_intervals = 100
 
-    next_state_approx = linear_cl_system(state, center=state)
-    print(next_state_approx)
+    x_edges     = np.linspace(0.0, 50.0, num_x_intervals + 1)
+    y_edges     = np.linspace(0.0, 50.0, num_y_intervals + 1)
+    theta_edges = np.linspace(-np.pi, np.pi, num_theta_intervals + 1)
 
-    start_cpu = time.process_time()
+    error_bounds = lagrange_error_bounds_grid(x_edges, y_edges, theta_edges)
 
-    lower_bounds = np.array([-1.0,-1.0, -0.1])
-    upper_bounds = np.array([1.0, 1.0, 0.1])
+    import matplotlib.pyplot as plt
 
-    error_bounds = lagrange_error_bounds(
-        lower_bounds=lower_bounds,
-        upper_bounds=upper_bounds,
-        resolution=10)
-    print(error_bounds)
+    # Find the theta slice closest to 0
+    theta_idx = 74
 
-    end_cpu = time.process_time()
-    print(f"Elapsed time: {end_cpu - start_cpu:.4f} seconds")
+    # error_bounds shape: (Nx, Ny, Nt, 3); take the theta slice and compute the norm over dim 3
+    slice_2d = error_bounds[:, :, theta_idx, :]          # (Nx, Ny, 3)
+    norm_2d  = np.linalg.norm(slice_2d, axis=-1)         # (Nx, Ny)
 
+    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    im = ax.pcolormesh(x_edges, y_edges, norm_2d.T, cmap='turbo', shading='flat',
+                       edgecolors='k', linewidth=0.1)
+    fig.colorbar(im, ax=ax, label='‖error bound‖')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_title(f'Lagrange error bound norm')
+    plt.tight_layout()
+    plt.show()
