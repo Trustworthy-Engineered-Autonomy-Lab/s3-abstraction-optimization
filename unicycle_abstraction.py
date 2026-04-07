@@ -7,10 +7,6 @@
 # =====================================================================
 # Libraries for the unicycle system
 # =====================================================================
-# import os
-# os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
-# os.environ.setdefault('MKL_NUM_THREADS', '1')
-# os.environ.setdefault('OMP_NUM_THREADS', '1')
 
 import unicycle_system_sympy as uss
 import pyModelChecking as pmc
@@ -93,9 +89,10 @@ def build_abstraction(
 
                 # Compute cell centroid and evaluate Jacobian there; compute post-image AABB
                 centroid = (lower_bounds + upper_bounds) / 2.0
-                # J = uss.jacobian(centroid) # might be marginally faster to precompute J?
-                next_lower_bounds = uss.linear_cl_system(lower_bounds, centroid)
-                next_upper_bounds = uss.linear_cl_system(upper_bounds, centroid)
+                J = uss.jacobian(centroid)
+                f_center = uss.cl_system_numeric(centroid)
+                next_lower_bounds = uss.linear_cl_system(lower_bounds, centroid, J=J, f_center=f_center)
+                next_upper_bounds = uss.linear_cl_system(upper_bounds, centroid, J=J, f_center=f_center)
 
                 # Determine Lagrange error bounds and compute Hammard product of AABB
                 error_bound = error_bounds[i, j, k, :]
@@ -147,7 +144,7 @@ def build_abstraction(
                         kripke_transitions.add(edge)  # transitions oob
 
                 kripke_labels[src] = label
-                if num_states_iterated % 1000 == 0:
+                if num_states_iterated % 10000 == 0:
                     elapsed = time.time() - start_time
                     if num_states_iterated > 0:
                         rate = num_states_iterated / elapsed
@@ -376,7 +373,7 @@ def theta_min_arc_intervals(
 
 if __name__ == "__main__":
 
-    abstraction_shape = [50, 50, 50]
+    abstraction_shape = [100, 100, 100]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 40.0, np.pi])
 
