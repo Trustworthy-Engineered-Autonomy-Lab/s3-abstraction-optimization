@@ -373,7 +373,7 @@ def theta_min_arc_intervals(
 
 if __name__ == "__main__":
 
-    abstraction_shape = [100, 100, 100]
+    abstraction_shape = [50, 50, 20]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 40.0, np.pi])
 
