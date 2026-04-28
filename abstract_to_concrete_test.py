@@ -1,6 +1,8 @@
 # Libraries
 import matplotlib.pyplot as plt
 import numpy as np
+import time
+import pickle as pkl
 
 
 
@@ -15,12 +17,17 @@ def dynamics(state):
 def build_abstraction(
         shape,
         domain_lb,
-        domain_ub
+        domain_ub,
+        *,
+        x_edges = None,
+        y_edges = None
         ):
     
     nstates_1, nstates_2 = shape
-    x_edges = np.linspace(domain_lb[0], domain_ub[0], nstates_1 + 1)
-    y_edges = np.linspace(domain_lb[1], domain_ub[1], nstates_2 + 1)
+
+    if x_edges is None or y_edges is None:
+        x_edges = np.linspace(domain_lb[0], domain_ub[0], nstates_1 + 1)
+        y_edges = np.linspace(domain_lb[1], domain_ub[1], nstates_2 + 1)
     
     transition_system = {}
     for i in range(nstates_1):
@@ -70,6 +77,12 @@ def enclosing_aabb_verts(points):
         [xmax, ymin],
         [xmax, ymax],
     ])
+
+
+def random_cell_edges(lower_bound, upper_bound, num_cells, rng=None):
+    rng = np.random.default_rng(rng)
+    interior_edges = np.sort(rng.uniform(lower_bound, upper_bound, size=num_cells - 1))
+    return np.concatenate(([lower_bound], interior_edges, [upper_bound]))
 
 
 def shortest_distance_from_state_to_cell(
@@ -227,42 +240,172 @@ def max_sampled_distance_to_successors(
                default=np.nan)
 
 
-
-if __name__ == "__main__":
-
-    # Build a simple nondeterminsitic transition system of the dynamical system
-    domain_lb = [0, 0]
-    domain_ub = [10, 10]
-    shape = [50, 50]
+def compute_min_delta(
+        shape,
+        domain_lb,
+        domain_ub,
+        x_edges,
+        y_edges,
+        delta_iterations=500,
+        num_samples=500
+        ):
     nstates_1, nstates_2 = shape
-    x_edges = np.linspace(domain_lb[0], domain_ub[0], nstates_1 + 1)
-    y_edges = np.linspace(domain_lb[1], domain_ub[1], nstates_2 + 1)
-    transition_system = build_abstraction(shape,
-                                          domain_lb,
-                                          domain_ub)
-    
+    transition_system = build_abstraction(
+        shape,
+        domain_lb,
+        domain_ub,
+        x_edges=x_edges,
+        y_edges=y_edges
+    )
+
     min_delta = 0.0
     for i in range(nstates_1):
         for j in range(nstates_2):
             cell = (i, j)
             delta = 0.0
-            for _ in range(1000):
-
+            for _ in range(delta_iterations):
                 delta_sat = max_sampled_distance_to_successors(
                     x_edges,
                     y_edges,
                     cell,
                     transition_system,
                     delta,
-                    num_samples = 500)
+                    num_samples=num_samples
+                )
                 if np.abs(delta - delta_sat) <= 1e-1:
                     delta = max(delta, delta_sat)
                     break
-                else:
-                    delta = max(delta, delta_sat)
-            
-            print(f"Minimum satisficing delta for {cell} was found to be {delta:.2f}")
+                delta = max(delta, delta_sat)
+
             if delta > min_delta:
                 min_delta = delta
-    print(f"Smallest possible satisficing delta = {min_delta:.2f}")
+
+    return min_delta
+
+
+
+if __name__ == "__main__":
+
+    # Previous single-run experiment kept for reference.
+    # domain_lb = [0, 0]
+    # domain_ub = [10, 10]
+    # shape = [50, 50]
+    #
+    # nstates_1, nstates_2 = shape
+    # rng = np.random.default_rng()
+    # x_edges = random_cell_edges(domain_lb[0], domain_ub[0], nstates_1, rng=rng)
+    # y_edges = random_cell_edges(domain_lb[1], domain_ub[1], nstates_2, rng=rng)
+    #
+    # min_delta = compute_min_delta(
+    #     shape,
+    #     domain_lb,
+    #     domain_ub,
+    #     x_edges,
+    #     y_edges,
+    #     delta_iterations=500,
+    #     num_samples=500
+    # )
+    # print(f"Smallest possible satisficing delta = {min_delta:.2f}")
+
+    domain_lb = [0, 0]
+    domain_ub = [10, 10]
+    shape = [50, 50]
+    num_trials = 10
+
+    nstates_1, nstates_2 = shape
+    trial_ids = np.arange(1, num_trials + 1)
+    min_deltas = []
+    rng = np.random.default_rng()
+
+    for trial in trial_ids:
+        x_edges = random_cell_edges(domain_lb[0], domain_ub[0], nstates_1, rng=rng)
+        y_edges = random_cell_edges(domain_lb[1], domain_ub[1], nstates_2, rng=rng)
+
+        min_delta = compute_min_delta(
+            shape,
+            domain_lb,
+            domain_ub,
+            x_edges,
+            y_edges,
+            delta_iterations=1000,
+            num_samples=500
+        )
+        min_deltas.append(min_delta)
+        print(f"trial={trial}, shape={shape}, min_delta={min_delta:.2f}")
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(trial_ids, min_deltas, marker="o")
+    plt.xlabel("Radnom trial #")
+    plt.ylabel("$\hat{d}^{\leftarrow}(\hat{s}, s)$")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+    # domain_lb = [0, 0]
+    # domain_ub = [10, 10]
+    # shapes = [[10, 10], [20, 20], [30, 30], [40, 40], [50, 50], [60, 60], [70, 70], [80, 80], [90, 90], [100, 100]]
+    # calc_runtime = []
+    # min_deltas = []
+    # for shape in shapes:
+    #     nstates_1, nstates_2 = shape
+    #     rng = np.random.default_rng()
+    #     x_edges = random_cell_edges(domain_lb[0], domain_ub[0], nstates_1, rng=rng)
+    #     y_edges = random_cell_edges(domain_lb[1], domain_ub[1], nstates_2, rng=rng)
+    #     transition_system = build_abstraction(shape, domain_lb, domain_ub, x_edges=x_edges, y_edges=y_edges)
+
+    #     algorithm_start = time.process_time()
+    #     min_delta = 0.0
+    #     count = 0
+    #     for i in range(nstates_1):
+    #         for j in range(nstates_2):
+    #             cell = (i, j)
+    #             delta = 0.0
+    #             for _ in range(500):
+    #                 delta_sat = max_sampled_distance_to_successors(
+    #                     x_edges,
+    #                     y_edges,
+    #                     cell,
+    #                     transition_system,
+    #                     delta,
+    #                     num_samples=500)
+    #                 if np.abs(delta - delta_sat) <= 1e-1:
+    #                     delta = max(delta, delta_sat)
+    #                     break
+    #                 delta = max(delta, delta_sat)
+
+    #             if delta > min_delta:
+    #                 min_delta = delta
+                
+    #             if count % 100 == 0:
+    #                 print(f"    > Iter. {count} for shape={shape}")
+    #             count += 1
+
+    #     algorithm_runtime = time.process_time() - algorithm_start
+
+    #     calc_runtime.append(algorithm_runtime)
+    #     min_deltas.append(min_delta)
+
+    #     print(
+    #         f"shape={shape}, cpu_runtime={algorithm_runtime:.4f}s, min_delta={min_delta:.2f}"
+    #     )
+
+    # num_states = [s[0] * s[1] for s in shapes]
+
+    # fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+    # axes[0].plot(num_states, calc_runtime, marker="o")
+    # axes[0].set_xlabel("# abstract states")
+    # axes[0].set_ylabel("Runtime (CPU seconds)")
+    # axes[0].grid(True)
+
+    # axes[1].plot(num_states, min_deltas, marker="o")
+    # axes[1].set_xlabel("# abstract states")
+    # axes[1].set_ylabel("$\hat{d}^{\leftarrow}(\hat{s}, s)$")
+    # axes[1].grid(True)
+
+    # fig.tight_layout()
+    # plt.show()
         

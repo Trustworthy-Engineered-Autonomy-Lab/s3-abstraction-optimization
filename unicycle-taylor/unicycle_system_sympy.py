@@ -438,24 +438,24 @@ if __name__ == "__main__":
 
     error_bounds = lagrange_error_bounds_grid(x_edges, y_edges, theta_edges)
 
-    import matplotlib.pyplot as plt
+    # import matplotlib.pyplot as plt
 
-    # Find the theta slice closest to 0
-    theta_idx = 74
+    # # Find the theta slice closest to 0
+    # theta_idx = 74
 
-    # error_bounds shape: (Nx, Ny, Nt, 3); take the theta slice and compute the norm over dim 3
-    slice_2d = error_bounds[:, :, theta_idx, :]          # (Nx, Ny, 3)
-    norm_2d  = np.linalg.norm(slice_2d, axis=-1)         # (Nx, Ny)
+    # # error_bounds shape: (Nx, Ny, Nt, 3); take the theta slice and compute the norm over dim 3
+    # slice_2d = error_bounds[:, :, theta_idx, :]          # (Nx, Ny, 3)
+    # norm_2d  = np.linalg.norm(slice_2d, axis=-1)         # (Nx, Ny)
 
-    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
-    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+    # x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+    # y_centers = (y_edges[:-1] + y_edges[1:]) / 2
 
-    fig, ax = plt.subplots(figsize=(7, 6))
-    im = ax.pcolormesh(x_edges, y_edges, norm_2d.T, cmap='turbo', shading='flat',
-                       edgecolors='k', linewidth=0.1)
-    fig.colorbar(im, ax=ax, label='‖error bound‖')
-    ax.set_xlabel('x')
-    ax.set_ylabel('y')
-    ax.set_title(f'Lagrange error bound norm')
-    plt.tight_layout()
-    plt.show()
+    # fig, ax = plt.subplots(figsize=(7, 6))
+    # im = ax.pcolormesh(x_edges, y_edges, norm_2d.T, cmap='turbo', shading='flat',
+    #                    edgecolors='k', linewidth=0.1)
+    # fig.colorbar(im, ax=ax, label='‖error bound‖')
+    # ax.set_xlabel('x')
+    # ax.set_ylabel('y')
+    # ax.set_title(f'Lagrange error bound norm')
+    # plt.tight_layout()
+    # plt.show()
