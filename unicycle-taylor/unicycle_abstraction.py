@@ -13,7 +13,6 @@ import pyModelChecking as pmc
 import numpy as np
 from itertools import product
 import pickle as pkl
-import time
 
 
 # =====================================================================
@@ -21,15 +20,15 @@ import time
 # =====================================================================
 
 def build_abstraction(
-        shape,
-        domain_lb,
-        domain_ub,
+        x_edges,
+        y_edges,
+        theta_edges,
         *,
+        verbose = False,
         goal_center = np.array([40.0, 20.0]),
         goal_radius = 8.0,
         obs_center = np.array([25.0, 25.0]),
-        obs_radius = 5.0,
-        hessian_grid_resolution = 20
+        obs_radius = 5.0
         ):
     """
     Casts the unicycle closed-loop system as a finite-state transition
@@ -40,7 +39,9 @@ def build_abstraction(
     """
 
     # Extract model size details
-    nstates_1, nstates_2, nstates_3 = shape
+    nstates_1 = len(x_edges) - 1
+    nstates_2 = len(y_edges) - 1
+    nstates_3 = len(theta_edges) - 1
     n_kripke_states = nstates_1 * nstates_2 * nstates_3 + 1 # includes out of bounds state
     oob_state_id = n_kripke_states - 1
 
@@ -49,23 +50,14 @@ def build_abstraction(
     kripke_transitions = set()
     kripke_labels = {}
 
-    # ID labeling function
-    def cell_state_id(i, j, k):
-        return i * (nstates_2 * nstates_3) + j * nstates_3 + k
-    
-    # Make cell edges
-    x_edges = np.linspace(domain_lb[0], domain_ub[0], nstates_1 + 1)
-    y_edges = np.linspace(domain_lb[1], domain_ub[1], nstates_2 + 1)
-    theta_edges = np.linspace(domain_lb[2], domain_ub[2], nstates_3 + 1)
-
-    # Pre-comput Lagrange error bounds in batches for efficiency
+    # Pre-compute Lagrange error bounds in batches for efficiency
     error_bounds = uss.lagrange_error_bounds_grid(x_edges, y_edges, theta_edges)
     
     # Iterate over cells and determine successors w/Taylor reachability
-    print("Starting abstraction construction...")
+    if verbose:
+        print("Starting abstraction construction...")
     num_states_iterated = 0
     total_states = n_kripke_states - 1
-    start_time = time.time()
     for i in range(nstates_1):
         x_lo, x_hi = x_edges[i], x_edges[i+1]
         for j in range(nstates_2):
@@ -91,8 +83,12 @@ def build_abstraction(
                 centroid = (lower_bounds + upper_bounds) / 2.0
                 J = uss.jacobian(centroid)
                 f_center = uss.cl_system_numeric(centroid)
-                next_lower_bounds = uss.linear_cl_system(lower_bounds, centroid, J=J, f_center=f_center)
-                next_upper_bounds = uss.linear_cl_system(upper_bounds, centroid, J=J, f_center=f_center)
+                linearized_next_verts = np.array([
+                    uss.linear_cl_system(vert, centroid, J=J, f_center=f_center)
+                    for vert in all_verts
+                ])
+                next_lower_bounds = linearized_next_verts.min(axis=0)
+                next_upper_bounds = linearized_next_verts.max(axis=0)
 
                 # Determine Lagrange error bounds and compute Hammard product of AABB
                 error_bound = error_bounds[i, j, k, :]
@@ -132,9 +128,9 @@ def build_abstraction(
                                         y_bounds=(y_edges[0], y_edges[-1]))
 
                 # Allocate relations to Kripke structure components
-                src = cell_state_id(i, j, k)
+                src = cell_to_id(i, j, k, nstates_1, nstates_2, nstates_3)
                 for (ip, jp, kp) in succ_cells:
-                    dst = cell_state_id(ip, jp, kp)
+                    dst = cell_to_id(ip, jp, kp, nstates_1, nstates_2, nstates_3)
                     edge = (src, dst)
                     if edge not in kripke_transitions:
                         kripke_transitions.add(edge)
@@ -144,40 +140,22 @@ def build_abstraction(
                         kripke_transitions.add(edge)  # transitions oob
 
                 kripke_labels[src] = label
-                if num_states_iterated % 10000 == 0:
-                    elapsed = time.time() - start_time
-                    if num_states_iterated > 0:
-                        rate = num_states_iterated / elapsed
-                        remaining = (total_states - num_states_iterated) / rate
+                if verbose and num_states_iterated % 10000 == 0:
                         print(f"    > {num_states_iterated} / {total_states} states "
-                              f"| elapsed: {elapsed:.1f}s "
-                              f"| ETA: {remaining:.1f}s")
-                    else:
-                        print(f"    > {num_states_iterated} / {total_states} states "
-                              f"| elapsed: {elapsed:.1f}s")
+                              )
                 num_states_iterated += 1
 
     # Label the out-of-bounds state; add self-loop
     kripke_labels[oob_state_id] = ['fail']
     kripke_transitions.add((oob_state_id, oob_state_id))
 
-    # Define initial states (in bounds, non-goal states)
-    initial_states = [s for s in kripke_states if s != oob_state_id]
-
-    # Make the Kripke structure
-    print("Constructing Kripke structure...")
-    kripke_structure = pmc.Kripke(S=kripke_states,
-                                  S0=initial_states,
-                                  R=list(kripke_transitions),
-                                  L=kripke_labels)
-    
     # Output as dictionary
     kripke_components = {
         'kripke_states': kripke_states,
         'kripke_transitions': kripke_transitions,
         'kripke_labels': kripke_labels}
     
-    return kripke_structure, kripke_components
+    return kripke_components
 
 def intersecting_cells_from_aabb(
         x_params,
@@ -277,11 +255,15 @@ def is_obs_state(
     Determines whether a cell is an (unsafe) obstacle state
     """
 
-    # Return True if any vertex is within any obstacle circle
-    for v in vertices:
-        if np.linalg.norm(v[:2] - center) <= radius:
-            return True
-    return False
+    x_min = np.min(vertices[:, 0])
+    x_max = np.max(vertices[:, 0])
+    y_min = np.min(vertices[:, 1])
+    y_max = np.max(vertices[:, 1])
+
+    closest_x = np.clip(center[0], x_min, x_max)
+    closest_y = np.clip(center[1], y_min, y_max)
+
+    return np.linalg.norm(np.array([closest_x, closest_y]) - center) <= radius
 
 
 def is_oob_state(
@@ -303,7 +285,7 @@ def is_oob_state(
 
 
 # =====================================================================
-# Helper functions
+# Abstraction helper functions
 # =====================================================================
 
 
@@ -365,6 +347,65 @@ def theta_min_arc_intervals(
     lo1, hi1 = start_u - np.pi, np.pi
     lo2, hi2 = -np.pi, (end_u2 - two_pi) - np.pi
     return [(float(lo2), float(hi2)), (float(lo1), float(hi1))]
+
+
+# =====================================================================
+# State identification helpers
+# =====================================================================
+
+def cell_to_id(i, j, k, nstates_1, nstates_2, nstates_3):
+    return i * (nstates_2 * nstates_3) + j * nstates_3 + k
+
+def id_to_cell(id, nstates_1, nstates_2, nstates_3):
+    cells_per_i = nstates_2 * nstates_3
+    i = id // cells_per_i
+    remainder = id % cells_per_i
+    j = remainder // nstates_3
+    k = remainder % nstates_3
+    return i, j, k
+
+
+# =====================================================================
+# Initial state space initilization
+# =====================================================================
+
+def init_cells_to_ids(
+        init_domain_lb,
+        init_domain_ub,
+        x_edges,
+        y_edges,
+        theta_edges,
+        ) -> list[int]:
+    """
+    Return all abstract state ids whose cells overlap the given initial
+    axis-aligned subdomain of the continuous state space.
+    """
+
+    init_domain_lb = np.asarray(init_domain_lb, dtype=float)
+    init_domain_ub = np.asarray(init_domain_ub, dtype=float)
+
+    init_cells = intersecting_cells_from_aabb(
+        x_edges,
+        y_edges,
+        theta_edges,
+        init_domain_lb[0],
+        init_domain_lb[1],
+        init_domain_lb[2],
+        init_domain_ub[0],
+        init_domain_ub[1],
+        init_domain_ub[2],
+    )
+
+    nstates_1 = len(x_edges) - 1
+    nstates_2 = len(y_edges) - 1
+    nstates_3 = len(theta_edges) - 1
+
+    init_ids = [
+        cell_to_id(i, j, k, nstates_1, nstates_2, nstates_3)
+        for (i, j, k) in init_cells]
+
+    return init_cells, init_ids
+
 
 
 # =====================================================================
