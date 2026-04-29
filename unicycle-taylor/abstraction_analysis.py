@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import time
 import pickle as pkl
+import unicycle_abstraction as ua
 
 
 
@@ -20,44 +21,6 @@ def dynamics(state):
     x_star = np.array([5.0, 5.0])
     state = np.asarray(state)
     return (state - x_star) @ A.T + x_star
-
-
-def build_abstraction(
-        shape,
-        domain_lb,
-        domain_ub,
-        *,
-        x_edges = None,
-        y_edges = None
-        ):
-    
-    nstates_1, nstates_2 = shape
-
-    if x_edges is None or y_edges is None:
-        x_edges = np.linspace(domain_lb[0], domain_ub[0], nstates_1 + 1)
-        y_edges = np.linspace(domain_lb[1], domain_ub[1], nstates_2 + 1)
-    
-    transition_system = {}
-    for i in range(nstates_1):
-        for j in range(nstates_2):
-            xlb, xub, ylb, yub = cell_bounds_from_index(
-                x_edges,
-                y_edges,
-                (i, j)
-            )
-
-            verts = np.array([[xlb, ylb],
-                              [xlb, yub],
-                              [xub, ylb],
-                              [xub, yub]])
-            
-            next_verts = np.array([dynamics(vert) for vert in verts])
-            next_aabb_verts = enclosing_aabb_verts(next_verts)
-            next_cells = intersecting_cells_from_aabb(x_edges, y_edges, next_aabb_verts)
-
-            transition_system[(i, j)] = next_cells
-    
-    return transition_system
 
 
 def cell_bounds_from_index(
@@ -226,7 +189,7 @@ def max_sampled_distance_to_successors(
         num_samples=1000,
         rng=None
         ):
-    successor_cells = transition_system[cell]
+    successor_ids = transition_system[cell]
     state_samples = sample_states_within_delta_of_cell(
         x_edges,
         y_edges,
@@ -292,7 +255,72 @@ def compute_min_delta(
 
 
 
+
+
+def make_transition_system_dict(
+        kripke_states,
+        kripke_transitions,
+        nstates_1,
+        nstates_2,
+        nstates_3
+        ):
+    """
+    Convert Kripke transitions given as (src, dst) edges into a dictionary
+    mapping each cell (i, j, k) to its list of successor cells.
+    """
+
+    oob_state_id = kripke_states[-1]
+
+    successor_dict = {
+        ua.id_to_cell(state_id, nstates_1, nstates_2, nstates_3): []
+        for state_id in kripke_states
+        if state_id != oob_state_id
+    }
+
+    for src, dst in kripke_transitions:
+        if src == oob_state_id or dst == oob_state_id:
+            continue
+        src_cell = ua.id_to_cell(src, nstates_1, nstates_2, nstates_3)
+        dst_cell = ua.id_to_cell(dst, nstates_1, nstates_2, nstates_3)
+        successor_dict[src_cell].append(dst_cell)
+
+    for state_id in successor_dict:
+        successor_dict[state_id].sort()
+
+    return successor_dict
+
+
 if __name__ == "__main__":
+
+    # Fixed abstraction and environment settings
+    nstates_1 = 10
+    nstates_2 = 10
+    nstates_3 = 10
+    abstraction_shape = [nstates_1, nstates_2, nstates_3]
+    domain_lb = np.array([0.0, 0.0, -np.pi])
+    domain_ub = np.array([50.0, 50.0, np.pi])
+
+    # Define the initial domain
+    init_domain_lb = np.array([20.0, 0.0, 0.0])
+    init_domain_ub = np.array([50.0, 40.0, 0.0])
+
+    # Initialize the grid parameters
+    x_edges = np.linspace(domain_lb[0], domain_ub[0], nstates_1+1)
+    y_edges = np.linspace(domain_lb[1], domain_ub[1], nstates_2+1)
+    theta_edges = np.linspace(domain_lb[2], domain_ub[2], nstates_3+1)
+
+    # Build the initial Kripke components
+    kripke_components = ua.build_abstraction(x_edges, y_edges, theta_edges, verbose=True)
+
+    transition_system = make_transition_system_dict(kripke_components['kripke_states'],
+                                                    kripke_components['kripke_transitions'],
+                                                    nstates_1,
+                                                    nstates_2,
+                                                    nstates_3)
+
+
+
+
 
     # Previous single-run experiment kept for reference.
     # domain_lb = [0, 0]

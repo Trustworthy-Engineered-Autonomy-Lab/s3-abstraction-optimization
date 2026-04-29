@@ -362,7 +362,7 @@ def id_to_cell(id, nstates_1, nstates_2, nstates_3):
     remainder = id % cells_per_i
     j = remainder // nstates_3
     k = remainder % nstates_3
-    return i, j, k
+    return (i, j, k)
 
 
 # =====================================================================
