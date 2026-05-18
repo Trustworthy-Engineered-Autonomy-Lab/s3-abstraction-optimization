@@ -287,59 +287,59 @@ def compute_min_delta(
 if __name__ == "__main__":
 
     # Previous single-run experiment kept for reference.
-    # domain_lb = [0, 0]
-    # domain_ub = [10, 10]
-    # shape = [50, 50]
-    #
-    # nstates_1, nstates_2 = shape
-    # rng = np.random.default_rng()
-    # x_edges = random_cell_edges(domain_lb[0], domain_ub[0], nstates_1, rng=rng)
-    # y_edges = random_cell_edges(domain_lb[1], domain_ub[1], nstates_2, rng=rng)
-    #
-    # min_delta = compute_min_delta(
-    #     shape,
-    #     domain_lb,
-    #     domain_ub,
-    #     x_edges,
-    #     y_edges,
-    #     delta_iterations=500,
-    #     num_samples=500
-    # )
-    # print(f"Smallest possible satisficing delta = {min_delta:.2f}")
-
     domain_lb = [0, 0]
     domain_ub = [10, 10]
     shape = [50, 50]
-    num_trials = 10
-
+    
     nstates_1, nstates_2 = shape
-    trial_ids = np.arange(1, num_trials + 1)
-    min_deltas = []
     rng = np.random.default_rng()
+    x_edges = random_cell_edges(domain_lb[0], domain_ub[0], nstates_1, rng=rng)
+    y_edges = random_cell_edges(domain_lb[1], domain_ub[1], nstates_2, rng=rng)
+    
+    min_delta = compute_min_delta(
+        shape,
+        domain_lb,
+        domain_ub,
+        x_edges,
+        y_edges,
+        delta_iterations=500,
+        num_samples=500
+    )
+    print(f"Smallest possible satisficing delta = {min_delta:.2f}")
 
-    for trial in trial_ids:
-        x_edges = random_cell_edges(domain_lb[0], domain_ub[0], nstates_1, rng=rng)
-        y_edges = random_cell_edges(domain_lb[1], domain_ub[1], nstates_2, rng=rng)
+    # domain_lb = [0, 0]
+    # domain_ub = [10, 10]
+    # shape = [50, 50]
+    # num_trials = 10
 
-        min_delta = compute_min_delta(
-            shape,
-            domain_lb,
-            domain_ub,
-            x_edges,
-            y_edges,
-            delta_iterations=1000,
-            num_samples=500
-        )
-        min_deltas.append(min_delta)
-        print(f"trial={trial}, shape={shape}, min_delta={min_delta:.2f}")
+    # nstates_1, nstates_2 = shape
+    # trial_ids = np.arange(1, num_trials + 1)
+    # min_deltas = []
+    # rng = np.random.default_rng()
 
-    plt.figure(figsize=(8, 4))
-    plt.plot(trial_ids, min_deltas, marker="o")
-    plt.xlabel("Radnom trial #")
-    plt.ylabel("$\hat{d}^{\leftarrow}(\hat{s}, s)$")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
+    # for trial in trial_ids:
+    #     x_edges = random_cell_edges(domain_lb[0], domain_ub[0], nstates_1, rng=rng)
+    #     y_edges = random_cell_edges(domain_lb[1], domain_ub[1], nstates_2, rng=rng)
+
+    #     min_delta = compute_min_delta(
+    #         shape,
+    #         domain_lb,
+    #         domain_ub,
+    #         x_edges,
+    #         y_edges,
+    #         delta_iterations=1000,
+    #         num_samples=500
+    #     )
+    #     min_deltas.append(min_delta)
+    #     print(f"trial={trial}, shape={shape}, min_delta={min_delta:.2f}")
+
+    # plt.figure(figsize=(8, 4))
+    # plt.plot(trial_ids, min_deltas, marker="o")
+    # plt.xlabel("Random trial #")
+    # plt.ylabel("$\hat{d}^{\leftarrow}(\hat{s}, s)$")
+    # plt.grid(True)
+    # plt.tight_layout()
+    # plt.show()
 
 
 
