@@ -29,7 +29,9 @@ def unicycle_plant(
     delta_t = np.asarray(0.5, dtype=state.dtype)
     velocity = np.asarray(5.0, dtype=state.dtype)
     max_control = np.asarray(max_control, dtype=state.dtype)
-    pose_x, pose_y, theta = state
+    pose_x = state[..., 0]
+    pose_y = state[..., 1]
+    theta = state[..., 2]
 
     # Apply control bounds (heading rate of change)
     control = np.clip(control, -max_control, max_control)
@@ -39,7 +41,7 @@ def unicycle_plant(
     next_pose_y = pose_y + (delta_t * velocity * np.sin(theta))
     next_theta = wrap_to_pi(theta + (delta_t * control))  # normalize angle to [-pi, pi]
 
-    return np.stack([next_pose_x, next_pose_y, next_theta])
+    return np.stack([next_pose_x, next_pose_y, next_theta], axis=-1)
 
 
 def state_controller(
@@ -70,8 +72,10 @@ def state_controller(
     k_theta = np.asarray(k_theta, dtype=state.dtype)
     omega_max = np.asarray(omega_max, dtype=state.dtype)
     eps = np.asarray(eps, dtype=state.dtype)
-    px, py, theta = state
-    p = np.stack([px, py])
+    px = state[..., 0]
+    py = state[..., 1]
+    theta = state[..., 2]
+    p = np.stack([px, py], axis=-1)
 
     # Attractive component
     v_att = k_goal * (goal_center - p)
@@ -82,11 +86,11 @@ def state_controller(
     clearance = dist - obs_radius
     w = np.exp(-alpha * clearance)
     denom = (dist**3 + eps)
-    v_rep = np.sum(k_rep * w * diff / denom, axis=0)
+    v_rep = k_rep * w[..., None] * diff / denom[..., None]
 
     # Compute desire heading angle and smooth control input
     v = v_att + v_rep
-    theta_d = np.arctan2(v[1], v[0])
+    theta_d = np.arctan2(v[..., 1], v[..., 0])
     e_theta = wrap_to_pi(theta_d - theta)
     omega = omega_max * np.tanh(k_theta * e_theta)
 

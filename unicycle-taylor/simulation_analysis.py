@@ -183,14 +183,27 @@ def max_sampled_distance_to_successors(
     )
     next_state_samples = np.array([us.cl_system(state) for state in state_samples])
 
-    return max((shortest_distance_from_state_to_cell(
-                    edges,
-                    state,
-                    successor
-                )
-                for successor in successor_cells
-                for state in next_state_samples),
-               default=np.nan)
+    max_min_delta = 0.0
+    for successor in successor_cells:
+        min_delta = np.inf
+        for state in next_state_samples:
+            delta = shortest_distance_from_state_to_cell(edges, state, successor)
+            if delta < min_delta:
+                min_delta = delta
+        if min_delta > max_min_delta:
+            max_min_delta = min_delta
+    
+    return max_min_delta
+
+
+    # return max((shortest_distance_from_state_to_cell(
+    #                 edges,
+    #                 state,
+    #                 successor
+    #             )
+    #             for successor in successor_cells
+    #             for state in next_state_samples),
+    #            default=np.nan)
 
 def compute_satisficing_delta(
         transition_system,
@@ -218,11 +231,46 @@ def compute_satisficing_delta(
             rng=rng
         )
         if np.abs(delta - delta_sat) <= tol:
-            delta = max(delta, delta_sat)
             break
         # delta = max(delta, delta_sat)
         delta = delta_sat
         print(delta)
+
+    return delta
+
+def compute_satisficing_delta_smooth(
+        transition_system,
+        edges,
+        cell,
+        delta=0.0,
+        delta_iterations=100,
+        num_samples=500,
+        tol = 1e-1,
+        smoothness = 1.0,
+        rng=23
+        ):
+    """
+    Employs fixed-point iteration to approximate the smallest possible delta that
+    constitutes a valid delta-approximate simulation relation, i.e., the simulation
+    metric, for a particular abstract state.
+    """
+    
+    for _ in range(delta_iterations):
+        delta_sat = max_sampled_distance_to_successors(
+            transition_system,
+            edges,
+            cell,
+            delta=delta,
+            num_samples=num_samples,
+            rng=rng
+        )
+
+        if np.abs(delta - delta_sat) <= tol:
+            break
+        else:
+            grad = smoothness * (delta_sat - delta)
+            delta += grad
+            # print(f"Delta: {delta:.3f}, Min. satisfying: {delta_sat:.3f}, Gradient: {grad:.3f}")
 
     return delta
 
@@ -240,20 +288,25 @@ def approx_upward_metric(
     nstates_1, nstates_2, nstates_3 = shape
 
     min_delta = 0.0
+    count = 0
     for i in range(nstates_1):
         for j in range(nstates_2):
             for k in range(nstates_3):
                 cell = (i, j, k)
                 delta = 0.0
-                delta_sat = compute_satisficing_delta(transition_system,
-                                                      edges,
-                                                      cell,
-                                                      delta,
-                                                      delta_iterations=delta_iterations,
-                                                      num_samples=num_samples,
-                                                      tol=tol)
+                delta_sat = compute_satisficing_delta_smooth(transition_system,
+                                                            edges,
+                                                            cell,
+                                                            delta,
+                                                            delta_iterations=delta_iterations,
+                                                            num_samples=num_samples,
+                                                            tol=tol)
                 if delta_sat > min_delta:
-                    min_delta = delta_sat    
+                    min_delta = delta_sat
+                    print(f"Current min delta: {min_delta}")
+                if count % 1 == 0:
+                    print(f"Processed = {count}")
+                count += 1
 
     return min_delta
 
@@ -326,29 +379,28 @@ if __name__ == "__main__":
                                                     nstates_2,
                                                     nstates_3)
 
-    upward_delta = compute_satisficing_delta(transition_system, edges,
-                                             (2, 2, 2),
-                                             delta = 0.0,
-                                             delta_iterations=100,
-                                             num_samples=100,
-                                             tol=1e-1)
+    # cell_id = (10, 10, 10)
+    # upward_delta = compute_satisficing_delta_smooth(transition_system, edges,
+    #                                                 cell_id,
+    #                                                 delta = 0.0,
+    #                                                 delta_iterations=100,
+    #                                                 num_samples=100,
+    #                                                 tol=1e-3)
     
-    # upward_delta = approx_upward_metric(transition_system,
-    #                                     shape,
-    #                                     edges,
-    #                                     delta_iterations=100,
-    #                                     num_samples=100,
-    #                                     tol=1e-1)
-    # print(upward_delta)
+    upward_delta = approx_upward_metric(transition_system,
+                                        shape,
+                                        edges,
+                                        delta_iterations=50,
+                                        num_samples=30,
+                                        tol=1e-1)
+    print(upward_delta)
 
-    # max_max_dist = max_sampled_distance_to_successors(transition_system,
+    # max_min_delta = max_sampled_distance_to_successors(transition_system,
     #                                                   edges,
     #                                                   (2, 2, 2),
-    #                                                   delta = 68.4,
-    #                                                   num_samples=1000)
-    # print(max_max_dist)
-
-
+    #                                                   delta = 2.12,
+    #                                                   num_samples=5000)
+    # print(max_min_delta)
 
 
     # Previous single-run experiment kept for reference.
