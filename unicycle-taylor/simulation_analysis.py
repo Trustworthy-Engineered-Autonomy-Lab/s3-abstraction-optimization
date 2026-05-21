@@ -8,6 +8,7 @@
 # =====================================================================
 
 import numpy as np
+import matplotlib.pyplot as plt
 import unicycle_system as us
 import unicycle_abstraction as ua
 
@@ -36,6 +37,32 @@ def shortest_distance_from_state_to_cell(
 
     return np.sqrt(dx**2 + dy**2 + dtheta**2)
 
+
+def shortest_distance_from_states_to_cell(
+        edges,
+        states,
+        cell_index
+        ):
+    """
+    Vectorized shortest distance between many concrete states and one abstract
+    cell.
+    """
+
+    xlb, xub, ylb, yub, thetalb, thetaub = cell_bounds_from_index(edges,
+                                                                  cell_index)
+    states = np.asarray(states)
+    x = states[:, 0]
+    y = states[:, 1]
+    theta = states[:, 2]
+
+    dx = np.maximum(np.maximum(xlb - x, 0.0), x - xub)
+    dy = np.maximum(np.maximum(ylb - y, 0.0), y - yub)
+    dtheta = shortest_circular_distance_to_interval_vectorized(theta,
+                                                               thetalb,
+                                                               thetaub)
+
+    return np.sqrt(dx**2 + dy**2 + dtheta**2)
+
 def shortest_circular_distance_to_interval(
         theta,
         theta_lb,
@@ -59,6 +86,68 @@ def shortest_circular_distance_to_interval(
     dist_to_lb = abs(us.wrap_to_pi(theta - theta_lb))
     dist_to_ub = abs(us.wrap_to_pi(theta - theta_ub))
     return min(dist_to_lb, dist_to_ub)
+
+
+def shortest_circular_distance_to_interval_vectorized(
+        theta,
+        theta_lb,
+        theta_ub
+        ):
+    """
+    Vectorized shortest angular distance from theta to a theta interval on S^1.
+    """
+
+    theta = us.wrap_to_pi(np.asarray(theta))
+    theta_lb = us.wrap_to_pi(np.asarray(theta_lb))
+    theta_ub = us.wrap_to_pi(np.asarray(theta_ub))
+
+    in_interval = np.where(
+        theta_lb <= theta_ub,
+        (theta_lb <= theta) & (theta <= theta_ub),
+        (theta >= theta_lb) | (theta <= theta_ub)
+    )
+
+    dist_to_lb = np.abs(us.wrap_to_pi(theta - theta_lb))
+    dist_to_ub = np.abs(us.wrap_to_pi(theta - theta_ub))
+    return np.where(in_interval, 0.0, np.minimum(dist_to_lb, dist_to_ub))
+
+
+def shortest_distance_from_states_to_cells(
+        edges,
+        states,
+        cell_indices
+        ):
+    """
+    Vectorized shortest distance between many concrete states and many abstract
+    cells. Returns an array of shape (num_cells, num_states).
+    """
+
+    states = np.asarray(states)
+    cell_indices = np.asarray(cell_indices, dtype=int)
+
+    if cell_indices.size == 0:
+        return np.empty((0, states.shape[0]))
+
+    x_edges, y_edges, theta_edges = edges
+
+    xlb = x_edges[cell_indices[:, 0]][:, None]
+    xub = x_edges[cell_indices[:, 0] + 1][:, None]
+    ylb = y_edges[cell_indices[:, 1]][:, None]
+    yub = y_edges[cell_indices[:, 1] + 1][:, None]
+    thetalb = theta_edges[cell_indices[:, 2]][:, None]
+    thetaub = theta_edges[cell_indices[:, 2] + 1][:, None]
+
+    x = states[:, 0][None, :]
+    y = states[:, 1][None, :]
+    theta = states[:, 2][None, :]
+
+    dx = np.maximum(np.maximum(xlb - x, 0.0), x - xub)
+    dy = np.maximum(np.maximum(ylb - y, 0.0), y - yub)
+    dtheta = shortest_circular_distance_to_interval_vectorized(theta,
+                                                               thetalb,
+                                                               thetaub)
+
+    return np.sqrt(dx**2 + dy**2 + dtheta**2)
 
 def cell_bounds_from_index(
         edges,
@@ -145,11 +234,11 @@ def sample_states_within_delta_of_cell(
 
         batch = np.column_stack((xs, ys, thetas))
 
-        for state in batch:
-            if shortest_distance_from_state_to_cell(edges, state, cell_index) <= delta:
-                samples.append(state)
-                if len(samples) == num_samples:
-                    break
+        mask = shortest_distance_from_states_to_cell(edges, batch, cell_index) <= delta
+        accepted = batch[mask]
+        if accepted.size > 0:
+            num_needed = num_samples - len(samples)
+            samples.extend(accepted[:num_needed])
 
     samples = np.asarray(samples)
     rng.shuffle(samples)
@@ -181,19 +270,15 @@ def max_sampled_distance_to_successors(
         num_samples,
         rng=rng
     )
-    next_state_samples = np.array([us.cl_system(state) for state in state_samples])
+    next_state_samples = us.cl_system(state_samples)
 
-    max_min_delta = 0.0
-    for successor in successor_cells:
-        min_delta = np.inf
-        for state in next_state_samples:
-            delta = shortest_distance_from_state_to_cell(edges, state, successor)
-            if delta < min_delta:
-                min_delta = delta
-        if min_delta > max_min_delta:
-            max_min_delta = min_delta
-    
-    return max_min_delta
+    if not successor_cells:
+        return 0.0
+
+    distances = shortest_distance_from_states_to_cells(edges,
+                                                       next_state_samples,
+                                                       successor_cells)
+    return distances.min(axis=1).max(initial=0.0)
 
 
     # return max((shortest_distance_from_state_to_cell(
@@ -213,7 +298,8 @@ def compute_satisficing_delta(
         delta_iterations=500,
         num_samples=500,
         tol = 1e-1,
-        rng=None
+    rng=None,
+    verbose=False
         ):
     """
     Employs fixed-point iteration to approximate the smallest possible delta that
@@ -234,7 +320,8 @@ def compute_satisficing_delta(
             break
         # delta = max(delta, delta_sat)
         delta = delta_sat
-        print(delta)
+        if verbose:
+            print(delta)
 
     return delta
 
@@ -280,7 +367,9 @@ def approx_upward_metric(
         edges,
         delta_iterations=500,
         num_samples=500,
-        tol = 1e-1
+        tol = 1e-1,
+        verbose=False,
+        progress_interval=1000
         ):
     """
     Iterates over all cells and determines the largest satisficing delta
@@ -303,9 +392,10 @@ def approx_upward_metric(
                                                             tol=tol)
                 if delta_sat > min_delta:
                     min_delta = delta_sat
-                    print(f"Current min delta: {min_delta}")
-                if count % 1 == 0:
-                    print(f"Processed = {count}")
+                    if verbose:
+                        print(f"Current min delta: {min_delta}")
+                if verbose and count % progress_interval == 0:
+                    print(f"Iters = {count}")
                 count += 1
 
     return min_delta
@@ -348,6 +438,23 @@ def make_transition_system_dict(
 
 
 # =====================================================================
+# Miscellaneous methods
+# =====================================================================
+
+def random_cell_edges(
+        lower_bound,
+        upper_bound,
+        num_cells,
+        rng=None
+        ):
+    rng = np.random.default_rng(rng)
+    interior_edges = np.sort(
+        rng.uniform(lower_bound, upper_bound, size=num_cells - 1)
+    )
+    return np.concatenate(([lower_bound], interior_edges, [upper_bound]))
+
+
+# =====================================================================
 # Place to test above methods
 # =====================================================================
 
@@ -365,11 +472,19 @@ if __name__ == "__main__":
     init_domain_lb = np.array([20.0, 0.0, 0.0])
     init_domain_ub = np.array([50.0, 40.0, 0.0])
 
-    # Initialize the grid parameters
-    x_edges = np.linspace(domain_lb[0], domain_ub[0], nstates_1+1)
-    y_edges = np.linspace(domain_lb[1], domain_ub[1], nstates_2+1)
-    theta_edges = np.linspace(domain_lb[2], domain_ub[2], nstates_3+1)
+    # Initialize randome edges
+    # rng = np.random.default_rng(80)
+    rng = None
+    x_edges = random_cell_edges(domain_lb[0], domain_ub[0], nstates_1, rng=rng)
+    y_edges = random_cell_edges(domain_lb[1], domain_ub[1], nstates_2, rng=rng)
+    theta_edges = random_cell_edges(domain_lb[2], domain_ub[2], nstates_3, rng=rng)
     edges = [x_edges, y_edges, theta_edges]
+
+    # # # Initialize the grid parameters
+    # x_edges = np.linspace(domain_lb[0], domain_ub[0], nstates_1+1)
+    # y_edges = np.linspace(domain_lb[1], domain_ub[1], nstates_2+1)
+    # theta_edges = np.linspace(domain_lb[2], domain_ub[2], nstates_3+1)
+    # edges = [x_edges, y_edges, theta_edges]
 
     # Build the initial Kripke components
     kripke_components = ua.build_abstraction(x_edges, y_edges, theta_edges, verbose=True)
@@ -378,48 +493,29 @@ if __name__ == "__main__":
                                                     nstates_1,
                                                     nstates_2,
                                                     nstates_3)
-
-    # cell_id = (10, 10, 10)
-    # upward_delta = compute_satisficing_delta_smooth(transition_system, edges,
-    #                                                 cell_id,
-    #                                                 delta = 0.0,
-    #                                                 delta_iterations=100,
-    #                                                 num_samples=100,
-    #                                                 tol=1e-3)
     
+
+    # Approximate the simulation metric
     upward_delta = approx_upward_metric(transition_system,
                                         shape,
                                         edges,
                                         delta_iterations=50,
-                                        num_samples=30,
-                                        tol=1e-1)
-    print(upward_delta)
+                                        num_samples=50,
+                                        tol=1e-1,
+                                        verbose=True)
 
-    # max_min_delta = max_sampled_distance_to_successors(transition_system,
-    #                                                   edges,
-    #                                                   (2, 2, 2),
-    #                                                   delta = 2.12,
-    #                                                   num_samples=5000)
-    # print(max_min_delta)
+    fig, ax = plt.subplots()
+    for x_edge in x_edges:
+        ax.axvline(x_edge, color="black", linewidth=0.8)
+    for y_edge in y_edges:
+        ax.axhline(y_edge, color="black", linewidth=0.8)
 
+    ax.set_xlim(x_edges[0], x_edges[-1])
+    ax.set_ylim(y_edges[0], y_edges[-1])
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title(f"Upward $\delta$ = {upward_delta:.3f}")
+    plt.show()
 
-    # Previous single-run experiment kept for reference.
-    # domain_lb = [0, 0]
-    # domain_ub = [10, 10]
-    # shape = [50, 50]
-    #
-    # nstates_1, nstates_2 = shape
-    # rng = np.random.default_rng()
-    # x_edges = random_cell_edges(domain_lb[0], domain_ub[0], nstates_1, rng=rng)
-    # y_edges = random_cell_edges(domain_lb[1], domain_ub[1], nstates_2, rng=rng)
-    #
-    # min_delta = compute_min_delta(
-    #     shape,
-    #     domain_lb,
-    #     domain_ub,
-    #     x_edges,
-    #     y_edges,
-    #     delta_iterations=500,
-    #     num_samples=500
-    # )
-    # print(f"Smallest possible satisficing delta = {min_delta:.2f}")
+    
