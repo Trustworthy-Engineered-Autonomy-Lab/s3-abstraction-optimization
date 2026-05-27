@@ -8,6 +8,7 @@
 # =====================================================================
 
 import unicycle_abstraction as ua
+import unicycle_objectives as uo
 import numpy as np
 import pyModelChecking as pmc
 import pyModelChecking.CTL as CTL
@@ -38,6 +39,32 @@ def model_check_kripke(kripke_structure):
 
 
 # =====================================================================
-# Useful verification metrics
+# Model building helpers
 # =====================================================================
 
+def build_and_verify_from_params(
+    params,
+    shape,
+    domain_lb,
+    domain_ub,
+    init_domain_lb,
+    init_domain_ub,
+    verbose=False):
+    """
+    Simple helper to compute verification metrics on a set of parameters.
+    """
+
+    x_edges, y_edges, theta_edges = uo.extract_grid_params(params, shape, domain_lb, domain_ub)
+    edges = [x_edges, y_edges, theta_edges]
+
+    _, init_states = ua.init_cells_to_ids(init_domain_lb, init_domain_ub, x_edges, y_edges, theta_edges)
+
+    kripke_components = ua.build_abstraction(x_edges, y_edges, theta_edges, verbose=verbose)
+    kripke_structure = pmc.Kripke(S=kripke_components['kripke_states'],
+                                  S0=init_states,
+                                  R=list(kripke_components['kripke_transitions']),
+                                  L=kripke_components['kripke_labels'])
+    sat_init_states, sat_prop = model_check_kripke(kripke_structure)
+    
+    return sat_prop
+    

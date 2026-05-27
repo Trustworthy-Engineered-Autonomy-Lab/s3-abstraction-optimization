@@ -7,10 +7,12 @@
 # =====================================================================
 
 import numpy as np
+import jax
+import jax.numpy as jnp
 
 
 # =====================================================================
-# End-to-end unicycle system
+# End-to-end unicycle system (numpy)
 # =====================================================================
 
 def unicycle_plant(
@@ -124,8 +126,128 @@ def cl_system(
 
 
 # =====================================================================
-# Helper methods
+# Helper methods (numpy)
 # =====================================================================
 
 def wrap_to_pi(angle):
     return (angle + np.pi) % (2 * np.pi) - np.pi
+
+
+# =====================================================================
+# End-to-end unicycle system (jax.numpy)
+# =====================================================================
+
+def unicycle_plant_jax(state, control, control_bound = np.pi/4):
+    """
+    JAX-configured open-loop unicycle dynamics.
+    """
+
+    state = jnp.asarray(state)
+    control = jnp.asarray(control)
+
+    # Unicycle model parameters
+    delta_t = jnp.asarray(0.5, dtype=state.dtype)
+    velocity = jnp.asarray(5.0, dtype=state.dtype)
+    control_bound = jnp.asarray(control_bound, dtype=state.dtype)
+    pose_x, pose_y, theta = state
+
+    # Apply control bounds (heading rate of change)
+    control = jnp.clip(control, -control_bound, control_bound)
+
+    # Update the state
+    next_pose_x = pose_x + (delta_t * velocity * jnp.cos(theta))
+    next_pose_y = pose_y + (delta_t * velocity * jnp.sin(theta))
+    next_theta = wrap_to_pi_jax(theta + (delta_t * control))  # normalize angle to [-pi, pi]
+
+    return jnp.stack([next_pose_x, next_pose_y, next_theta])
+
+def state_controller_jax(
+    state,
+    *,
+    goal_center,
+    obstacle_centers,
+    obstacle_radii,
+    k_goal=1.0,
+    k_rep=8.0,
+    alpha=0.6,
+    k_theta=2.5,
+    omega_max=np.pi/4,
+    eps=1e-6,
+    ):
+    """
+    JAX-configured deterministic & smooth controller for unicycle.
+    """
+
+    state = jnp.asarray(state)
+    goal_center = jnp.asarray(goal_center, dtype=state.dtype)
+    obstacle_centers = jnp.asarray(obstacle_centers, dtype=state.dtype)
+    obstacle_radii = jnp.asarray(obstacle_radii, dtype=state.dtype)
+
+    k_goal = jnp.asarray(k_goal, dtype=state.dtype)
+    k_rep = jnp.asarray(k_rep, dtype=state.dtype)
+    alpha = jnp.asarray(alpha, dtype=state.dtype)
+    k_theta = jnp.asarray(k_theta, dtype=state.dtype)
+    omega_max = jnp.asarray(omega_max, dtype=state.dtype)
+    eps = jnp.asarray(eps, dtype=state.dtype)
+
+    px, py, theta = state
+    p = jnp.stack([px, py])
+
+    # Attractive component (toward goal)
+    v_att = k_goal * (goal_center - p)
+
+    # Repulsive component (sum over discs)
+    # obstacle_centers: [N, 2], obstacle_radii: [N]
+    diff = p[None, :] - obstacle_centers
+    dist = jnp.sqrt(jnp.sum(diff**2, axis=-1) + eps)  # smoothed distance to center
+    clearance = dist - obstacle_radii
+
+    # Smooth activation: stronger when near obstacle, decays with clearance
+    w = jnp.exp(-alpha * clearance)
+
+    # Direction away from obstacle with smoothing in denom
+    denom = (dist**3 + eps)[:, None]
+    v_rep = jnp.sum((k_rep * w)[:, None] * diff / denom, axis=0)
+
+    v = v_att + v_rep
+    v_norm = jnp.linalg.norm(v)
+
+    def _omega_when_ok(_):
+        theta_d = jnp.arctan2(v[1], v[0])
+        e_theta = wrap_to_pi_jax(theta_d - theta)
+        return omega_max * jnp.tanh(k_theta * e_theta)
+
+    omega = jax.lax.cond(v_norm < jnp.asarray(1e-9, dtype=state.dtype), lambda _: jnp.asarray(0.0, dtype=state.dtype), _omega_when_ok, operand=None)
+    return omega
+
+def cl_system_jax(state):
+    """
+    JAX-configured closed-loop unicycle dynamics.
+    """
+
+    state = jnp.asarray(state)
+    obs_center = jnp.array([25.0, 25.0], dtype=state.dtype)
+    obs_radius = jnp.asarray(5.0, dtype=state.dtype)
+    goal_center = jnp.array([40.0, 20.0], dtype=state.dtype)
+
+    control_input = state_controller_jax(
+        state,
+        goal_center=goal_center,
+        obstacle_centers=jnp.stack([obs_center], axis=0),
+        obstacle_radii=jnp.stack([obs_radius], axis=0),
+        k_goal=0.3,
+        k_rep=300.0,
+        alpha=0.1,
+        k_theta=2.0,
+        omega_max=jnp.pi / 4,
+    )
+    return unicycle_plant_jax(state, control_input)
+
+
+# =====================================================================
+# Helper methods (jax.numpy)
+# =====================================================================
+
+def wrap_to_pi_jax(angle):
+    angle = jnp.asarray(angle)
+    return (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi

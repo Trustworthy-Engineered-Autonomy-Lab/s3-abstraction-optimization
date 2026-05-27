@@ -7,14 +7,18 @@
 # =====================================================================
 
 import unicycle_abstraction as ua
+import simulation_analysis as sa
+import unicycle_objectives as uo
+import verification_tools as vt
+import unicycle_optimizers as u_opt
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pyModelChecking as pmc
-import pyModelChecking.CTL as CTL
-import verification_tools as vt
 
 
 # =====================================================================
-# Main training or evaluation program
+# Main training and evaluation program
 # =====================================================================
 
 if __name__ == "__main__":
@@ -24,22 +28,80 @@ if __name__ == "__main__":
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
-    # Define the initial domain
+    # Define the initial state subset domain
     init_domain_lb = np.array([20.0, 0.0, 0.0])
     init_domain_ub = np.array([50.0, 40.0, 0.0])
 
-    # Initialize the grid parameters
-    x_edges = np.linspace(domain_lb[0], domain_ub[0], abstraction_shape[0]+1)
-    y_edges = np.linspace(domain_lb[1], domain_ub[1], abstraction_shape[1]+1)
-    theta_edges = np.linspace(domain_lb[2], domain_ub[2], abstraction_shape[2]+1)
+    # Initialize abstraction parameters
+    key = jax.random.PRNGKey(0)
+    sigma_u = 1.0
+    # u1 = jnp.zeros((num_x_params,))  # initial uniform spacing
+    # u2 = jnp.zeros((num_y_params,))
+    # u3 = jnp.zeros((num_theta_params,))
+    key, k_u1, k_u2 = jax.random.split(key, 3)
+    u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
+    u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
+    u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
+    params = jnp.concatenate([u1, u2, u3])
 
+    # Verify the initial system
+    sat_prop = vt.build_and_verify_from_params(params,
+                                               abstraction_shape,
+                                               domain_lb,
+                                               domain_ub,
+                                               init_domain_lb,
+                                               init_domain_ub,
+                                               verbose=True)
+    print(sat_prop)
+
+    # Compute initial objective and gradient
+    val, grad = jax.value_and_grad(uo.image_volume_over_parent)(
+        params,
+        shape=abstraction_shape,
+        domain_lb=domain_lb,
+        domain_ub=domain_ub)
+    print(f"Initial objective value: {val:.4f}")
+    print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
+
+    # Employ gradient descent to optimize the grid
+    params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+        params,
+        uo.image_volume_over_parent,
+        shape=abstraction_shape,
+        domain_lb=domain_lb,
+        domain_ub=domain_ub,
+        steps=200,
+        lr=1e-4,
+        grad_clip=1e3,
+        print_every=1,
+        record_every=50)
     
+    # Verify the final system
+    sat_prop = vt.build_and_verify_from_params(params_opt,
+                                               abstraction_shape,
+                                               domain_lb,
+                                               domain_ub,
+                                               init_domain_lb,
+                                               init_domain_ub)
+    print(sat_prop)
 
-    # # Conservatively build the initial abstract state set
-    # _, init_states = ua.init_cells_to_ids(init_domain_lb, init_domain_ub, x_edges, y_edges, theta_edges)
+
+
+    # # Extract the initial grid parameters (edges)
+    # x_edges, y_edges, theta_edges = uo.extract_grid_params(params, abstraction_shape, domain_lb, domain_ub)
+    # edges = [x_edges, y_edges, theta_edges]
 
     # # Build the initial Kripke components
     # kripke_components = ua.build_abstraction(x_edges, y_edges, theta_edges, verbose=True)
+
+    # # Evaluate the upward simulation metric
+    # upward_delta = sa.approx_upward_metric(kripke_components,
+    #                                        abstraction_shape,
+    #                                        edges,
+    #                                        delta_iterations=50,
+    #                                        num_samples=50,
+    #                                        tol=1e-1,
+    #                                        verbose=True)
 
     # # Build the full kripke structure
     # kripke_structure = pmc.Kripke(S=kripke_components['kripke_states'],

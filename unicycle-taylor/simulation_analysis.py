@@ -362,7 +362,7 @@ def compute_satisficing_delta_smooth(
     return delta
 
 def approx_upward_metric(
-        transition_system,
+        kripke_components,
         shape,
         edges,
         delta_iterations=500,
@@ -375,7 +375,11 @@ def approx_upward_metric(
     Iterates over all cells and determines the largest satisficing delta
     """
     nstates_1, nstates_2, nstates_3 = shape
-
+    transition_system = make_transition_system_dict(kripke_components['kripke_states'],
+                                                    kripke_components['kripke_transitions'],
+                                                    nstates_1,
+                                                    nstates_2,
+                                                    nstates_3)
     min_delta = 0.0
     count = 0
     for i in range(nstates_1):
@@ -495,8 +499,8 @@ if __name__ == "__main__":
                                                     nstates_3)
     
 
-    # Approximate the simulation metric
-    upward_delta = approx_upward_metric(transition_system,
+    # # Approximate the simulation metric
+    upward_delta = approx_upward_metric(kripke_components,
                                         shape,
                                         edges,
                                         delta_iterations=50,
@@ -504,18 +508,16 @@ if __name__ == "__main__":
                                         tol=1e-1,
                                         verbose=True)
 
-    fig, ax = plt.subplots()
-    for x_edge in x_edges:
-        ax.axvline(x_edge, color="black", linewidth=0.8)
-    for y_edge in y_edges:
-        ax.axhline(y_edge, color="black", linewidth=0.8)
+    # fig, ax = plt.subplots()
+    # for x_edge in x_edges:
+    #     ax.axvline(x_edge, color="black", linewidth=0.8)
+    # for y_edge in y_edges:
+    #     ax.axhline(y_edge, color="black", linewidth=0.8)
 
-    ax.set_xlim(x_edges[0], x_edges[-1])
-    ax.set_ylim(y_edges[0], y_edges[-1])
-    ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_title(f"Upward $\delta$ = {upward_delta:.3f}")
-    plt.show()
-
-    
+    # ax.set_xlim(x_edges[0], x_edges[-1])
+    # ax.set_ylim(y_edges[0], y_edges[-1])
+    # ax.set_aspect("equal", adjustable="box")
+    # ax.set_xlabel("x")
+    # ax.set_ylabel("y")
+    # ax.set_title(f"Upward $\delta$ = {upward_delta:.3f}")
+    # plt.show()
