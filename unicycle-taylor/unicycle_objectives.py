@@ -170,6 +170,80 @@ def image_volume_over_parent(
     ratio = img_volume / (parent_volume + 1e-12)
     return jnp.sum(ratio)
 
+def inflated_image_volume(
+    params,
+    *,
+    shape,
+    domain_lb,
+    domain_ub,
+    ):
+    """
+    Sum of post-image AABB volume inflated with Lagrange bound for each abstract cell.
+    """
+
+    n1_internal, n2_internal, n3_internal = shape
+    x1_lo, x2_lo, x3_lo = domain_lb
+    x1_hi, x2_hi, x3_hi = domain_ub
+    
+    params = jnp.asarray(params)
+    u1 = params[:n1_internal]
+    u2 = params[n1_internal : n1_internal + n2_internal]
+    u3 = params[n1_internal + n2_internal : n1_internal + n2_internal + n3_internal]
+
+    # Convert gap-params -> actual y-line locations
+    x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
+    x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
+    x3_params = make_lines_from_gaps(u3, x3_lo, x3_hi)
+
+    # Build all cells' corners: (n1, n2, 4, 2)
+    x1_los = x1_params[:-1]
+    x1_his = x1_params[1:]
+    x2_los = x2_params[:-1]
+    x2_his = x2_params[1:]
+    x3_los = x3_params[:-1]
+    x3_his = x3_params[1:]
+
+    n1 = x1_los.shape[0]
+    n2 = x2_los.shape[0]
+    n3 = x3_los.shape[0]
+    x1_lo_grid = jnp.broadcast_to(x1_los[:, None, None], (n1, n2, n3))
+    x1_hi_grid = jnp.broadcast_to(x1_his[:, None, None], (n1, n2, n3))
+    x2_lo_grid = jnp.broadcast_to(x2_los[None, :, None], (n1, n2, n3))
+    x2_hi_grid = jnp.broadcast_to(x2_his[None, :, None], (n1, n2, n3))
+    x3_lo_grid = jnp.broadcast_to(x3_los[None, None, :], (n1, n2, n3))
+    x3_hi_grid = jnp.broadcast_to(x3_his[None, None, :], (n1, n2, n3))
+
+    # All 8 corners per cell: (n1, n2, n3, 8, 3)
+    corners = jnp.stack(
+        [
+            jnp.stack([x1_lo_grid, x2_lo_grid, x3_lo_grid], axis=-1),
+            jnp.stack([x1_lo_grid, x2_lo_grid, x3_hi_grid], axis=-1),
+            jnp.stack([x1_lo_grid, x2_hi_grid, x3_lo_grid], axis=-1),
+            jnp.stack([x1_lo_grid, x2_hi_grid, x3_hi_grid], axis=-1),
+            jnp.stack([x1_hi_grid, x2_lo_grid, x3_lo_grid], axis=-1),
+            jnp.stack([x1_hi_grid, x2_lo_grid, x3_hi_grid], axis=-1),
+            jnp.stack([x1_hi_grid, x2_hi_grid, x3_lo_grid], axis=-1),
+            jnp.stack([x1_hi_grid, x2_hi_grid, x3_hi_grid], axis=-1),
+        ],
+        axis=-2,
+    )
+
+    flat_corners = corners.reshape((-1, 3))
+    flat_next = jax.vmap(cl_system_jax)(flat_corners)
+    x_next = flat_next.reshape(corners.shape)
+
+    x1 = x_next[..., 0]
+    x2 = x_next[..., 1]
+    x3 = x_next[..., 2]
+    x1_lo_post = jnp.min(x1, axis=-1)
+    x1_hi_post = jnp.max(x1, axis=-1)
+    x2_lo_post = jnp.min(x2, axis=-1)
+    x2_hi_post = jnp.max(x2, axis=-1)
+    theta_span = theta_min_arc_length(x3)
+    img_volume = (x1_hi_post - x1_lo_post) * (x2_hi_post - x2_lo_post) * theta_span
+
+    return jnp.sum(img_volume)
+
 
 # =====================================================================
 # JAX-compatible helper methods

@@ -24,7 +24,7 @@ import pyModelChecking as pmc
 if __name__ == "__main__":
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [100, 100, 100]
+    abstraction_shape = [50, 50, 50]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
