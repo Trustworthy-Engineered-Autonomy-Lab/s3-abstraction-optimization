@@ -15,6 +15,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pyModelChecking as pmc
+import pickle as pkl
+import matplotlib.pyplot as plt
 
 
 # =====================================================================
@@ -24,20 +26,22 @@ import pyModelChecking as pmc
 if __name__ == "__main__":
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [50, 50, 50]
+    abstraction_shape = [80, 80, 40]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
     # Define the initial state subset domain
-    init_domain_lb = np.array([20.0, 0.0, 0.0])
-    init_domain_ub = np.array([50.0, 40.0, 0.0])
+    init_domain_lb = np.array([0.0, 0.0, -np.pi/4])
+    init_domain_ub = np.array([50.0, 50.0, np.pi/4])
+
+    gt_reach_fname = "unicycle-taylor/unicycle_gt_reach_regions_100.pkl"
 
     # Initialize abstraction parameters
     key = jax.random.PRNGKey(0)
     sigma_u = 1.0
-    # u1 = jnp.zeros((num_x_params,))  # initial uniform spacing
-    # u2 = jnp.zeros((num_y_params,))
-    # u3 = jnp.zeros((num_theta_params,))
+    # u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
+    # u2 = jnp.zeros((abstraction_shape[1],))
+    # u3 = jnp.zeros((abstraction_shape[2],))
     key, k_u1, k_u2 = jax.random.split(key, 3)
     u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
     u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
@@ -45,14 +49,15 @@ if __name__ == "__main__":
     params = jnp.concatenate([u1, u2, u3])
 
     # Verify the initial system
-    sat_prop = vt.build_and_verify_from_params(params,
+    recall = vt.build_and_verify_from_params(params,
                                                abstraction_shape,
                                                domain_lb,
                                                domain_ub,
                                                init_domain_lb,
                                                init_domain_ub,
+                                               gt_reach_fname=gt_reach_fname,
                                                verbose=True)
-    print(sat_prop)
+    print(recall)
 
     # Compute initial objective and gradient
     val, grad = jax.value_and_grad(uo.image_volume_over_parent)(
@@ -70,21 +75,81 @@ if __name__ == "__main__":
         shape=abstraction_shape,
         domain_lb=domain_lb,
         domain_ub=domain_ub,
-        steps=200,
+        steps=300,
         lr=1e-4,
         grad_clip=1e3,
         print_every=1,
         record_every=50)
     
     # Verify the final system
-    sat_prop = vt.build_and_verify_from_params(params_opt,
+    recall = vt.build_and_verify_from_params(params_opt,
                                                abstraction_shape,
                                                domain_lb,
                                                domain_ub,
                                                init_domain_lb,
-                                               init_domain_ub)
-    print(sat_prop)
+                                               init_domain_ub,
+                                               gt_reach_fname=gt_reach_fname,
+                                               verbose=True)
+    print(recall)
 
+
+
+
+
+    
+    # recalls = []
+    # costs = []
+
+    # for key_int in range(20):
+
+    #     # Initialize abstraction parameters
+    #     key = jax.random.PRNGKey(key_int)
+    #     sigma_u = 1.0
+    #     key, k_u1, k_u2 = jax.random.split(key, 3)
+    #     u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
+    #     u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
+    #     u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
+    #     params = jnp.concatenate([u1, u2, u3])
+
+    #     # Verify the initial system
+    #     gt_reach_fname = "unicycle-taylor/unicycle_gt_reach_regions_100.pkl"
+    #     recall = vt.build_and_verify_from_params(params,
+    #                                             abstraction_shape,
+    #                                             domain_lb,
+    #                                             domain_ub,
+    #                                             init_domain_lb,
+    #                                             init_domain_ub,
+    #                                             gt_reach_fname=gt_reach_fname,
+    #                                             verbose=False)
+    #     recalls.append(recall)
+
+    #     # Compute initial objective and gradient
+    #     val, grad = jax.value_and_grad(uo.image_volume)(
+    #         params,
+    #         shape=abstraction_shape,
+    #         domain_lb=domain_lb,
+    #         domain_ub=domain_ub)
+    #     costs.append(val)
+
+    #     print(f"Cost: {val:.4f}")
+    #     print(f"Recall: {recall}")
+
+    # uni_corr_data = {}
+    # uni_corr_data['recalls'] = recalls
+    # uni_corr_data['costs'] = costs
+    # with open("uni_corr_data.pkl", "wb") as f:
+    #     pkl.dump(uni_corr_data, f)
+
+    # with open("uni_corr_data.pkl", "rb") as f:
+    #     data = pkl.load(f)
+
+    # sat_props = np.array(data['sat_props'])
+    # costs = np.array(data['costs'])
+
+    # print(np.corrcoef(sat_props, costs))
+
+    # plt.scatter(sat_props, costs)
+    # plt.show()
 
 
     # # Extract the initial grid parameters (edges)
