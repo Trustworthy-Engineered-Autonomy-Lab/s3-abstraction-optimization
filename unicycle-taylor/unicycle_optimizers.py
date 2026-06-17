@@ -59,3 +59,58 @@ def gradient_descent(
             print(f"[{k}] J(p)={float(value):.3f}, |∇J(p)|={float(g_norm):.3f}")
 
     return params_gd, np.array(cost_history), np.array(grad_norm_history)
+
+
+# =====================================================================
+# Adaptive gradient descent (Adagrad)
+# =====================================================================
+
+def adaptive_gradient_descent(
+    params_init,
+    objective_fn,
+    *,
+    shape,
+    domain_lb,
+    domain_ub,
+    steps,
+    lr,
+    grad_clip,
+    epsilon=1e-8,
+    record_every=10,
+    print_every=10,
+    ):
+
+    @jax.jit
+    def adagrad_step(p, acc_g2, lr_value):
+        value, g = jax.value_and_grad(objective_fn)(
+            p,
+            shape=shape,
+            domain_lb=domain_lb,
+            domain_ub=domain_ub
+        )
+        g = jnp.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0)
+        g_norm = jnp.linalg.norm(g)
+        scale = jnp.minimum(1.0, grad_clip / (g_norm + 1e-12))
+        g = g * scale
+
+        # Per-parameter adaptive step size from accumulated squared gradients.
+        acc_g2 = acc_g2 + g * g
+        adjusted_lr = jnp.asarray(lr_value, dtype=p.dtype) / (jnp.sqrt(acc_g2) + epsilon)
+        p_next = p - adjusted_lr * g
+        return p_next, acc_g2, value, g_norm
+
+    params_adagrad = params_init
+    acc_g2 = jnp.zeros_like(params_adagrad)
+    cost_history = []
+    grad_norm_history = []
+    for k in range(steps):
+        params_adagrad, acc_g2, value, g_norm = adagrad_step(params_adagrad, acc_g2, lr)
+
+        if k % record_every == 0:
+            cost_history.append(float(value))
+            grad_norm_history.append(float(g_norm))
+
+        if k % print_every == 0:
+            print(f"[{k}] J(p)={float(value):.3f}, |∇J(p)|={float(g_norm):.3f}")
+
+    return params_adagrad, np.array(cost_history), np.array(grad_norm_history)

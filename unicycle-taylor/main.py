@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [80, 80, 40]
+    abstraction_shape = [100, 100, 50]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
@@ -49,18 +49,18 @@ if __name__ == "__main__":
     params = jnp.concatenate([u1, u2, u3])
 
     # Verify the initial system
-    recall = vt.build_and_verify_from_params(params,
-                                               abstraction_shape,
-                                               domain_lb,
-                                               domain_ub,
-                                               init_domain_lb,
-                                               init_domain_ub,
-                                               gt_reach_fname=gt_reach_fname,
-                                               verbose=True)
-    print(recall)
+    # recall = vt.build_and_verify_from_params(params,
+    #                                            abstraction_shape,
+    #                                            domain_lb,
+    #                                            domain_ub,
+    #                                            init_domain_lb,
+    #                                            init_domain_ub,
+    #                                            gt_reach_fname=gt_reach_fname,
+    #                                            verbose=True)
+    # print(recall)
 
     # Compute initial objective and gradient
-    val, grad = jax.value_and_grad(uo.image_volume_over_parent)(
+    val, grad = jax.value_and_grad(uo.image_volume)(
         params,
         shape=abstraction_shape,
         domain_lb=domain_lb,
@@ -69,14 +69,14 @@ if __name__ == "__main__":
     print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
     # Employ gradient descent to optimize the grid
-    params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    params_opt, cost_history, grad_norm_history = u_opt.adaptive_gradient_descent(
         params,
-        uo.image_volume_over_parent,
+        uo.image_volume,
         shape=abstraction_shape,
         domain_lb=domain_lb,
         domain_ub=domain_ub,
         steps=300,
-        lr=1e-4,
+        lr=1e-1,
         grad_clip=1e3,
         print_every=1,
         record_every=50)
