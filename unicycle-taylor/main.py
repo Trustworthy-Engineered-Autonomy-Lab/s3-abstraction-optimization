@@ -69,7 +69,7 @@ if __name__ == "__main__":
     print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
     # Employ gradient descent to optimize the grid
-    params_opt, cost_history, grad_norm_history = u_opt.adaptive_gradient_descent(
+    params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
         params,
         uo.image_volume,
         shape=abstraction_shape,
