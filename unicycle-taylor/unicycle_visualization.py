@@ -260,11 +260,11 @@ if __name__ == "__main__":
         theta_indices,
         verified_safe_states,
         ground_truth_check=ground_truth_check,
-        title="Tiny trained verification slices",
+        title="Trained verification slices",
     )
     print(f"Visualization counts: {counts}")
     if ground_truth_check is not None:
         for k, slice_counts in counts.items():
             print(f"Theta slice {k} recall: {slice_counts['recall']:.4f}")
-    fig.savefig("visualization_smoke_test.png", dpi=200)
+    fig.savefig("visualization_slice.png", dpi=200)
     plt.show()
