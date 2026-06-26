@@ -141,8 +141,7 @@ def build_abstraction(
 
                 kripke_labels[src] = label
                 if verbose and num_states_iterated % 10000 == 0:
-                        print(f"    > {num_states_iterated} / {total_states} states "
-                              )
+                        print(f"    > {num_states_iterated} / {total_states} states ")
                 num_states_iterated += 1
 
     # Label the out-of-bounds state; add self-loop
@@ -154,6 +153,13 @@ def build_abstraction(
         'kripke_states': kripke_states,
         'kripke_transitions': kripke_transitions,
         'kripke_labels': kripke_labels}
+    
+    # Final model summary
+    if verbose:
+        print(f"Final model details")
+        print(f"    > States = {len(kripke_states)}")
+        print(f"    > Transitions = {len(kripke_transitions)}")
+        print(f"    > Avg. succ/state = {len(kripke_transitions)/len(kripke_states)}")
     
     return kripke_components
 
@@ -420,6 +426,6 @@ if __name__ == "__main__":
 
     _, kripke_components = build_abstraction(abstraction_shape, domain_lb, domain_ub)
 
-    # Save the Kripke structure components for later use
-    with open("kripke_components.pkl", "wb") as f:
-        pkl.dump(kripke_components, f)
+    # # Save the Kripke structure components for later use
+    # with open("kripke_components.pkl", "wb") as f:
+    #     pkl.dump(kripke_components, f)

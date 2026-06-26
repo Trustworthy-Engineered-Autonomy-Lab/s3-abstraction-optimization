@@ -16,13 +16,14 @@ import pyModelChecking.CTL as CTL
 import jax
 import jax.numpy as jnp
 import pickle as pkl
+import time
 
 
 # =====================================================================
 # Kripke structure verification
 # =====================================================================
 
-def model_check_kripke(kripke_structure):
+def model_check_kripke(kripke_structure, log_time=False):
     """
     Returns the subset of initial states from which abstract
     trajectories satisfy the verification property. Also
@@ -32,7 +33,12 @@ def model_check_kripke(kripke_structure):
     """
 
     phi = 'A (safe U goal)'
+    if log_time:
+        start_time = time.perf_counter()
     sat = CTL.modelcheck(kripke_structure, phi)
+    if log_time:
+        end_time = time.perf_counter()
+        print(f"Verif time = {end_time-start_time:.4f}s")
     sat_set = set(sat)
     init_states = list(kripke_structure.S0)
 
@@ -53,7 +59,8 @@ def build_and_verify_from_params(
     init_domain_lb,
     init_domain_ub,
     gt_reach_fname,
-    verbose=False):
+    verbose=False,
+    log_time=False):
     """
     Simple helper to compute verification metrics on a set of parameters.
     """
@@ -73,15 +80,20 @@ def build_and_verify_from_params(
                                           theta_edges)
 
     # Build the kripke and model check
+    if log_time:
+        start_time = time.perf_counter()
     kripke_components = ua.build_abstraction(x_edges,
                                              y_edges,
                                              theta_edges,
                                              verbose=verbose)
+    if log_time:
+        end_time = time.perf_counter()
+        print(f"Build time = {end_time-start_time:.4f}s")
     kripke_structure = pmc.Kripke(S=kripke_components['kripke_states'],
                                   S0=init_states,
                                   R=list(kripke_components['kripke_transitions']),
                                   L=kripke_components['kripke_labels'])
-    sat_init_states = model_check_kripke(kripke_structure)
+    sat_init_states = model_check_kripke(kripke_structure, log_time=log_time)
 
     # Classify cells formed by abstraction as "goal" or "fail" per ground truth
     with open(gt_reach_fname, "rb") as f:
