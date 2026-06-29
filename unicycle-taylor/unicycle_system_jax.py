@@ -88,7 +88,7 @@ def state_controller(
     clearance = dist - obs_radius
     w = jnp.exp(-alpha * clearance)
     denom = (dist**3 + eps)
-    v_rep = jnp.sum(k_rep * w * diff / denom, axis=0)
+    v_rep = k_rep * w * diff / denom
 
     # Compute desire heading angle and smooth control input
     v = v_att + v_rep
@@ -142,6 +142,36 @@ def hessian(state):
     """
     return jax.jacfwd(jax.jacfwd(cl_system))(state)
 
+
+# =====================================================================
+# Approximates the Lipschitz constant of the system
+# =====================================================================
+
+def estimate_lipschitz_array(
+    domain_lb,
+    domain_ub,
+    points_per_dim=51,
+    quantile=0.999,
+):
+    axes = [
+        jnp.linspace(domain_lb[i], domain_ub[i], points_per_dim)
+        for i in range(3)
+    ]
+
+    states = jnp.stack(
+        jnp.meshgrid(*axes, indexing="ij"),
+        axis=-1,
+    ).reshape(-1, 3)
+
+    Js = jax.vmap(jacobian)(states)
+    abs_Js = np.asarray(jnp.abs(Js))
+
+    L = np.quantile(abs_Js, quantile, axis=0)
+
+    L[0] = np.array([1.0, 0.0, 2.5])
+    L[1] = np.array([0.0, 1.0, 2.5])
+
+    return L
 
 # =====================================================================
 # Linearized system and Lagrange bound helper functions

@@ -11,11 +11,32 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from unicycle_system import cl_system_jax, wrap_to_pi_jax
+import unicycle_system_jax as usj
 import itertools
 
 # =====================================================================
 # Objective functions
 # =====================================================================
+
+def succ_estimate(params,
+                *,
+                shape,
+                domain_lb,
+                domain_ub,
+                ):
+    
+    L = usj.estimate_lipschitz_array(domain_lb, domain_ub)
+    A = np.eye(3) + L
+
+    n1_internal, n2_internal, n3_internal = shape
+    x1_lo, x2_lo, x3_lo = domain_lb
+    x1_hi, x2_hi, x3_hi = domain_ub
+
+    gap1 = params[0]
+    gap2 = params[1]
+    gap3 = params[2]
+
+
 
 def image_volume(
     params,
@@ -169,6 +190,63 @@ def image_volume_over_parent(
 
     ratio = img_volume / (parent_volume + 1e-12)
     return jnp.sum(ratio)
+
+
+
+def succ_bound(
+    params,
+    *,
+    shape,
+    domain_lb,
+    domain_ub,
+    L, # component-wise Lipschitz constants
+    p=10.0 # soft min smoothing factor
+    ):
+    """Derived, smooth upper bound to successor count.
+    """
+
+    n1_internal, n2_internal, n3_internal = shape
+    x1_lo, x2_lo, x3_lo = domain_lb
+    x1_hi, x2_hi, x3_hi = domain_ub
+
+    params = jnp.asarray(params)
+    u1 = params[:n1_internal]
+    u2 = params[n1_internal : n1_internal + n2_internal]
+    u3 = params[n1_internal + n2_internal : n1_internal + n2_internal + n3_internal]
+
+    x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
+    x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
+    x3_params = make_lines_from_gaps(u3, x3_lo, x3_hi)
+
+    gap1 = jnp.diff(x1_params)
+    gap2 = jnp.diff(x2_params)
+    gap3 = jnp.diff(x3_params)
+
+    L = jnp.asarray(L)
+    p = jnp.asarray(p, dtype=params.dtype)
+    eps = jnp.asarray(1e-12, dtype=params.dtype)
+
+    def soft_min_gap(gaps):
+        return jnp.power(jnp.sum(jnp.power(gaps + eps, -p)), -1.0 / p)
+
+    eta = jnp.stack([
+        soft_min_gap(gap1),
+        soft_min_gap(gap2),
+        soft_min_gap(gap3),
+    ])
+
+    gap_grid = jnp.stack(
+        jnp.meshgrid(gap1, gap2, gap3, indexing="ij"),
+        axis=-1,
+    )
+    diam = jnp.einsum("...j,kj->...k", gap_grid, L)
+    prod = jnp.prod(2.0 + diam / (eta + eps), axis=-1)
+
+    return jnp.mean(prod)
+
+                
+
+
 
 def inflated_image_volume(
     params,

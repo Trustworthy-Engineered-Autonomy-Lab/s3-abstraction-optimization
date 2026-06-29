@@ -11,6 +11,7 @@ import simulation_analysis as sa
 import unicycle_objectives as uo
 import verification_tools as vt
 import unicycle_optimizers as u_opt
+import unicycle_system_jax as usj
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -26,7 +27,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [100, 100, 100]
+    abstraction_shape = [50, 50, 50]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
@@ -48,6 +49,15 @@ if __name__ == "__main__":
     u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
     params = jnp.concatenate([u1, u2, u3])
 
+    # L = usj.estimate_lipschitz_array(domain_lb, domain_ub)
+    # J = uo.succ_bound(params,
+    #               shape=abstraction_shape,
+    #               domain_lb=domain_lb,
+    #               domain_ub=domain_ub,
+    #               L=L,
+    #               p=20.0)
+    # print(J)
+
     # Verify the initial system
     recall = vt.build_and_verify_from_params(params,
                                                abstraction_shape,
@@ -60,39 +70,39 @@ if __name__ == "__main__":
                                                log_time=True)
     print(recall)
 
-    # Compute initial objective and gradient
-    val, grad = jax.value_and_grad(uo.image_volume_over_parent)(
-        params,
-        shape=abstraction_shape,
-        domain_lb=domain_lb,
-        domain_ub=domain_ub)
-    print(f"Initial objective value: {val:.4f}")
-    print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
+    # # Compute initial objective and gradient
+    # val, grad = jax.value_and_grad(uo.image_volume_over_parent)(
+    #     params,
+    #     shape=abstraction_shape,
+    #     domain_lb=domain_lb,
+    #     domain_ub=domain_ub)
+    # print(f"Initial objective value: {val:.4f}")
+    # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
-    # Employ gradient descent to optimize the grid
-    params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
-        params,
-        uo.image_volume_over_parent,
-        shape=abstraction_shape,
-        domain_lb=domain_lb,
-        domain_ub=domain_ub,
-        steps=300,
-        lr=1e-1,
-        grad_clip=1e3,
-        print_every=1,
-        record_every=50)
+    # # Employ gradient descent to optimize the grid
+    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    #     params,
+    #     uo.image_volume_over_parent,
+    #     shape=abstraction_shape,
+    #     domain_lb=domain_lb,
+    #     domain_ub=domain_ub,
+    #     steps=300,
+    #     lr=1e-1,
+    #     grad_clip=1e3,
+    #     print_every=1,
+    #     record_every=50)
     
-    # Verify the final system
-    recall = vt.build_and_verify_from_params(params_opt,
-                                               abstraction_shape,
-                                               domain_lb,
-                                               domain_ub,
-                                               init_domain_lb,
-                                               init_domain_ub,
-                                               gt_reach_fname=gt_reach_fname,
-                                               verbose=True,
-                                               log_time=True)
-    print(recall)
+    # # Verify the final system
+    # recall = vt.build_and_verify_from_params(params_opt,
+    #                                            abstraction_shape,
+    #                                            domain_lb,
+    #                                            domain_ub,
+    #                                            init_domain_lb,
+    #                                            init_domain_ub,
+    #                                            gt_reach_fname=gt_reach_fname,
+    #                                            verbose=True,
+    #                                            log_time=True)
+    # print(recall)
 
 
 
