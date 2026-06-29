@@ -150,28 +150,37 @@ def hessian(state):
 def estimate_lipschitz_array(
     domain_lb,
     domain_ub,
-    points_per_dim=51,
-    quantile=0.999,
+    points_per_dim=41,
+    batch_size=8192
 ):
+    """
+    Grid estimate of the componentwise Lipschitz array
+    """
+    domain_lb = np.asarray(domain_lb, dtype=float)
+    domain_ub = np.asarray(domain_ub, dtype=float)
+
     axes = [
-        jnp.linspace(domain_lb[i], domain_ub[i], points_per_dim)
+        np.linspace(domain_lb[i], domain_ub[i], points_per_dim)
         for i in range(3)
     ]
 
-    states = jnp.stack(
-        jnp.meshgrid(*axes, indexing="ij"),
-        axis=-1,
-    ).reshape(-1, 3)
+    mesh = np.meshgrid(*axes, indexing="ij")
+    states = np.stack(mesh, axis=-1).reshape(-1, 3)
 
-    Js = jax.vmap(jacobian)(states)
-    abs_Js = np.asarray(jnp.abs(Js))
+    batched_jacobian = jax.jit(jax.vmap(jacobian))
 
-    L = np.quantile(abs_Js, quantile, axis=0)
+    L = np.zeros((3, 3), dtype=float)
 
-    L[0] = np.array([1.0, 0.0, 2.5])
-    L[1] = np.array([0.0, 1.0, 2.5])
+    for start in range(0, len(states), batch_size):
+        state_batch = jnp.asarray(states[start:start + batch_size])
+
+        J = np.asarray(batched_jacobian(state_batch))
+
+        L_batch = np.max(np.abs(J), axis=0)
+        L = np.maximum(L, L_batch)
 
     return L
+
 
 # =====================================================================
 # Linearized system and Lagrange bound helper functions
