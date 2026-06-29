@@ -21,9 +21,7 @@ def gradient_descent(
     params_init,
     objective_fn,
     *,
-    shape,
-    domain_lb,
-    domain_ub,
+    args,
     steps,
     lr,
     grad_clip,
@@ -35,9 +33,7 @@ def gradient_descent(
     def gd_step(p, lr_value):
         value, g = jax.value_and_grad(objective_fn)(
             p,
-            shape=shape,
-            domain_lb=domain_lb,
-            domain_ub=domain_ub
+            args=args
         )
         g = jnp.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0)
         g_norm = jnp.linalg.norm(g)

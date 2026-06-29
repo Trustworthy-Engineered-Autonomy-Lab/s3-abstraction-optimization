@@ -36,22 +36,18 @@ def succ_estimate(params,
     gap2 = params[1]
     gap3 = params[2]
 
-
-
 def image_volume(
     params,
     *,
-    shape,
-    domain_lb,
-    domain_ub,
+    args
     ):
     """
     Sum of post-image AABB volume for each abstract cell.
     """
 
-    n1_internal, n2_internal, n3_internal = shape
-    x1_lo, x2_lo, x3_lo = domain_lb
-    x1_hi, x2_hi, x3_hi = domain_ub
+    n1_internal, n2_internal, n3_internal = args['shape']
+    x1_lo, x2_lo, x3_lo = args['domain_lb']
+    x1_hi, x2_hi, x3_hi = args['domain_ub']
     
     params = jnp.asarray(params)
     u1 = params[:n1_internal]
@@ -115,16 +111,14 @@ def image_volume(
 def image_volume_over_parent(
     params,
     *,
-    shape,
-    domain_lb,
-    domain_ub,
+    args
     ):
     """Sum over cells of (image AABB volume / parent AABB volume).
     """
 
-    n1_internal, n2_internal, n3_internal = shape
-    x1_lo, x2_lo, x3_lo = domain_lb
-    x1_hi, x2_hi, x3_hi = domain_ub
+    n1_internal, n2_internal, n3_internal = args['shape']
+    x1_lo, x2_lo, x3_lo = args['domain_lb']
+    x1_hi, x2_hi, x3_hi = args['domain_ub']
 
     params = jnp.asarray(params)
     u1 = params[:n1_internal]
@@ -191,23 +185,19 @@ def image_volume_over_parent(
     ratio = img_volume / (parent_volume + 1e-12)
     return jnp.sum(ratio)
 
-
-
 def succ_bound(
     params,
     *,
-    shape,
-    domain_lb,
-    domain_ub,
-    L, # component-wise Lipschitz constants
+    args,
     p=10.0 # soft min smoothing factor
     ):
     """Derived, smooth upper bound to successor count.
     """
-
-    n1_internal, n2_internal, n3_internal = shape
-    x1_lo, x2_lo, x3_lo = domain_lb
-    x1_hi, x2_hi, x3_hi = domain_ub
+    
+    n1_internal, n2_internal, n3_internal = args['shape']
+    x1_lo, x2_lo, x3_lo = args['domain_lb']
+    x1_hi, x2_hi, x3_hi = args['domain_ub']
+    L = args['L']
 
     params = jnp.asarray(params)
     u1 = params[:n1_internal]
@@ -243,10 +233,6 @@ def succ_bound(
     prod = jnp.prod(2.0 + diam / (eta + eps), axis=-1)
 
     return jnp.mean(prod)
-
-                
-
-
 
 def inflated_image_volume(
     params,

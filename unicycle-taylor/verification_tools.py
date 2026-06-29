@@ -65,7 +65,7 @@ def build_and_verify_from_params(
     Simple helper to compute verification metrics on a set of parameters.
     """
 
-    # Extract cocnrete cells edges from quantization parameters
+    # Extract concrete cells edges from quantization parameters
     x_edges, y_edges, theta_edges = uo.extract_grid_params(params,
                                                            shape,
                                                            domain_lb,

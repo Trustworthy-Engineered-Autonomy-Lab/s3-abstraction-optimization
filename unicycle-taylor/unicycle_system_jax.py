@@ -147,7 +147,7 @@ def hessian(state):
 # Approximates the Lipschitz constant of the system
 # =====================================================================
 
-def estimate_lipschitz_array(
+def lipschitz_array(
     domain_lb,
     domain_ub,
     points_per_dim=41,
@@ -181,6 +181,86 @@ def estimate_lipschitz_array(
 
     return L
 
+def quantile_lipschitz_array(
+    domain_lb,
+    domain_ub,
+    points_per_dim=51,
+    quantile=0.999,
+):
+    axes = [
+        jnp.linspace(domain_lb[i], domain_ub[i], points_per_dim)
+        for i in range(3)
+    ]
+
+    states = jnp.stack(
+        jnp.meshgrid(*axes, indexing="ij"),
+        axis=-1,
+    ).reshape(-1, 3)
+
+    Js = jax.vmap(jacobian)(states)
+    abs_Js = np.asarray(jnp.abs(Js))
+
+    L = np.quantile(abs_Js, quantile, axis=0)
+
+    L[0] = np.array([1.0, 0.0, 2.5])
+    L[1] = np.array([0.0, 1.0, 2.5])
+
+    return L
+
+def multiple_lipschitz_array(
+    x_edges,
+    y_edges,
+    theta_edges,
+    domain_lb,
+    domain_ub,
+    points_per_dim=41,
+    batch_size=8192
+):
+    """
+    Grid estimate of the componentwise Lipschitz array
+    """
+    domain_lb = np.asarray(domain_lb, dtype=float)
+    domain_ub = np.asarray(domain_ub, dtype=float)
+
+    nstates_1 = len(x_edges) - 1
+    nstates_2 = len(y_edges) - 1
+    nstates_3 = len(theta_edges) - 1
+
+    L_dict = {}
+
+    for i in range(nstates_1):
+        x_lo, x_hi = x_edges[i], x_edges[i+1]
+        for j in range(nstates_2):
+            y_lo, y_hi = y_edges[j], y_edges[j+1]
+            for k in range(nstates_3):
+                theta_lo, theta_hi = theta_edges[k], theta_edges[k+1]
+
+                subdomain_lb = [x_lo, y_lo, theta_lo]
+                subdomain_ub = [x_hi, y_hi, theta_hi]
+
+                axes = [
+                    np.linspace(subdomain_lb[i], subdomain_ub[i], points_per_dim)
+                    for i in range(3)
+                ]
+
+                mesh = np.meshgrid(*axes, indexing="ij")
+                states = np.stack(mesh, axis=-1).reshape(-1, 3)
+
+                batched_jacobian = jax.jit(jax.vmap(jacobian))
+
+                L = np.zeros((3, 3), dtype=float)
+
+                for start in range(0, len(states), batch_size):
+                    state_batch = jnp.asarray(states[start:start + batch_size])
+
+                    J = np.asarray(batched_jacobian(state_batch))
+
+                    L_batch = np.max(np.abs(J), axis=0)
+                    L = np.maximum(L, L_batch)
+
+                L_dict[(i, j, k)] = L
+
+    return L
 
 # =====================================================================
 # Linearized system and Lagrange bound helper functions
