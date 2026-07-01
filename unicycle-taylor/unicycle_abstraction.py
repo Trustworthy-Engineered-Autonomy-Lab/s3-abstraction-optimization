@@ -25,7 +25,6 @@ def build_abstraction(
         theta_edges,
         *,
         verbose = False,
-        L = None,
         goal_center = np.array([40.0, 20.0]),
         goal_radius = 8.0,
         obs_center = np.array([25.0, 25.0]),
@@ -91,14 +90,6 @@ def build_abstraction(
                 ])
                 next_lower_bounds = linearized_next_verts.min(axis=0)
                 next_upper_bounds = linearized_next_verts.max(axis=0)
-
-                # Determine Lipschitz-based conservative expansion, if available.
-                #################################################################
-                if L is not None:
-                    half_widths = (upper_bounds - lower_bounds) / 2.0
-                    lip_expansion = np.abs(L).dot(half_widths)
-                    next_lower_bounds -= lip_expansion
-                    next_upper_bounds += lip_expansion
 
                 # Determine Lagrange error bounds and compute Hammard product of AABB
                 error_bound = error_bounds[i, j, k, :]

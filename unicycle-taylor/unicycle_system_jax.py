@@ -156,6 +156,9 @@ def estimate_lipschitz_array(
     """
     Grid estimate of the componentwise Lipschitz array
     """
+    # domain bounds can be passed as numpy arrays or lists; keep them
+    # as numpy for grid construction, but use JAX arrays for Jacobian
+    # computations to avoid converting traced arrays to NumPy.
     domain_lb = np.asarray(domain_lb, dtype=float)
     domain_ub = np.asarray(domain_ub, dtype=float)
 
@@ -169,15 +172,16 @@ def estimate_lipschitz_array(
 
     batched_jacobian = jax.jit(jax.vmap(jacobian))
 
-    L = np.zeros((3, 3), dtype=float)
+    L = jnp.zeros((3, 3), dtype=jnp.float32)
 
     for start in range(0, len(states), batch_size):
         state_batch = jnp.asarray(states[start:start + batch_size])
 
-        J = np.asarray(batched_jacobian(state_batch))
+        # Keep J as a JAX array (no np.asarray conversion)
+        J = batched_jacobian(state_batch)
 
-        L_batch = np.max(np.abs(J), axis=0)
-        L = np.maximum(L, L_batch)
+        L_batch = jnp.max(jnp.abs(J), axis=0)
+        L = jnp.maximum(L, L_batch)
 
     return L
 

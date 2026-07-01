@@ -24,18 +24,49 @@ def succ_estimate(params,
                 domain_lb,
                 domain_ub,
                 ):
-    
-    L = usj.estimate_lipschitz_array(domain_lb, domain_ub)
-    A = np.eye(3) + L
+    """Smooth cost estimate for evenly spaced abstraction parameters.
+
+    Computes the cost
+        E(eta) = \prod_{i=1}^n \frac{1}{\eta_i} \sum_{j=1}^n A_{ij} \eta_j
+    with p_i = 0 and A = I + L, where L is the componentwise Lipschitz array.
+    """
+
+    # Ensure L is a JAX array and build A using JAX operations
+    L = jnp.asarray(usj.estimate_lipschitz_array(domain_lb, domain_ub))
+    A = jnp.eye(3, dtype=L.dtype) + L
 
     n1_internal, n2_internal, n3_internal = shape
     x1_lo, x2_lo, x3_lo = domain_lb
     x1_hi, x2_hi, x3_hi = domain_ub
 
-    gap1 = params[0]
-    gap2 = params[1]
-    gap3 = params[2]
+    params = jnp.asarray(params)
+    u1 = params[:n1_internal]
+    u2 = params[n1_internal : n1_internal + n2_internal]
+    u3 = params[n1_internal + n2_internal : n1_internal + n2_internal + n3_internal]
 
+    x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
+    x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
+    x3_params = make_lines_from_gaps(u3, x3_lo, x3_hi)
+
+    gap1 = jnp.diff(x1_params)
+    gap2 = jnp.diff(x2_params)
+    gap3 = jnp.diff(x3_params)
+
+    eps = jnp.asarray(1e-12, dtype=params.dtype)
+    p = jnp.asarray(20.0, dtype=params.dtype)
+
+    def soft_min_gap(gaps):
+        return jnp.power(jnp.sum(jnp.power(gaps + eps, -p)), -1.0 / p)
+
+    eta = jnp.stack([
+        soft_min_gap(gap1),
+        soft_min_gap(gap2),
+        soft_min_gap(gap3),
+    ])
+
+    numerator = A @ eta
+    term = numerator / (eta + eps)
+    return jnp.prod(term)
 
 
 def image_volume(
