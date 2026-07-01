@@ -25,6 +25,7 @@ def build_abstraction(
         theta_edges,
         *,
         verbose = False,
+        L = None,
         goal_center = np.array([40.0, 20.0]),
         goal_radius = 8.0,
         obs_center = np.array([25.0, 25.0]),
@@ -34,8 +35,9 @@ def build_abstraction(
     Casts the unicycle closed-loop system as a finite-state transition
     system (Kripke structure). Successor cells (abstract states) are
     assured to cover the ground-truth reachable set via 1-step Taylor
-    reachability, whereby post-image AABBs are inflated with the cell's 
-    Lagrange error.
+    reachability, whereby post-image AABBs are inflated with both the cell's 
+    Lagrange error and, optionally, a global Lipschitz-based conservative
+    expansion from matrix L.
     """
 
     # Extract model size details
@@ -89,6 +91,14 @@ def build_abstraction(
                 ])
                 next_lower_bounds = linearized_next_verts.min(axis=0)
                 next_upper_bounds = linearized_next_verts.max(axis=0)
+
+                # Determine Lipschitz-based conservative expansion, if available.
+                #################################################################
+                if L is not None:
+                    half_widths = (upper_bounds - lower_bounds) / 2.0
+                    lip_expansion = np.abs(L).dot(half_widths)
+                    next_lower_bounds -= lip_expansion
+                    next_upper_bounds += lip_expansion
 
                 # Determine Lagrange error bounds and compute Hammard product of AABB
                 error_bound = error_bounds[i, j, k, :]
@@ -381,9 +391,9 @@ def init_cells_to_ids(
         x_edges,
         y_edges,
         theta_edges,
-        ) -> list[int]:
+        ) -> tuple[list[tuple[int, int, int]], list[int]]:
     """
-    Return all abstract state ids whose cells overlap the given initial
+    Return all abstract cells and their state ids whose cells overlap the given initial
     axis-aligned subdomain of the continuous state space.
     """
 
@@ -411,6 +421,27 @@ def init_cells_to_ids(
         for (i, j, k) in init_cells]
 
     return init_cells, init_ids
+
+
+def init_ids_from_aabb(
+        init_domain_lb,
+        init_domain_ub,
+        x_edges,
+        y_edges,
+        theta_edges,
+        ) -> list[int]:
+    """
+    Return only the abstract state ids whose cells overlap the initial AABB.
+    """
+
+    _, init_ids = init_cells_to_ids(
+        init_domain_lb,
+        init_domain_ub,
+        x_edges,
+        y_edges,
+        theta_edges,
+    )
+    return init_ids
 
 
 

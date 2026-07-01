@@ -18,6 +18,7 @@ import numpy as np
 import pyModelChecking as pmc
 import pickle as pkl
 import matplotlib.pyplot as plt
+from unicycle_visualization import visualize_slice
 
 
 # =====================================================================
@@ -49,163 +50,121 @@ if __name__ == "__main__":
     u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
     params = jnp.concatenate([u1, u2, u3])
 
-    # L = usj.estimate_lipschitz_array(domain_lb, domain_ub)
-    # J = uo.succ_bound(params,
-    #               shape=abstraction_shape,
-    #               domain_lb=domain_lb,
-    #               domain_ub=domain_ub,
-    #               L=L,
-    #               p=20.0)
-    # print(J)
+    # ##### New code for successor-bound optimization
+    # Estimate the Lipschitz constant for the unicycle dynamics over the domain.
 
-    # Verify the initial system
-    recall = vt.build_and_verify_from_params(params,
-                                               abstraction_shape,
-                                               domain_lb,
-                                               domain_ub,
-                                               init_domain_lb,
-                                               init_domain_ub,
-                                               gt_reach_fname=gt_reach_fname,
-                                               verbose=True,
-                                               log_time=True)
-    print(recall)
+    L = usj.estimate_lipschitz_array(domain_lb, domain_ub)
+    J = uo.succ_bound(params,
+                  shape=abstraction_shape,
+                  domain_lb=domain_lb,
+                  domain_ub=domain_ub,
+                  L=L,
+                  p=20.0)
+    print(f"Initial successor bound J = {J}")
 
-    # # Compute initial objective and gradient
-    # val, grad = jax.value_and_grad(uo.image_volume_over_parent)(
-    #     params,
-    #     shape=abstraction_shape,
-    #     domain_lb=domain_lb,
-    #     domain_ub=domain_ub)
-    # print(f"Initial objective value: {val:.4f}")
-    # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
+    # Use the successor-bound estimate as the optimization objective.
+    def succ_cost(p, *, shape, domain_lb, domain_ub):
+        return uo.succ_bound(
+            p,
+            shape=shape,
+            domain_lb=domain_lb,
+            domain_ub=domain_ub,
+            L=L,
+            p=20.0,
+        )
 
-    # # Employ gradient descent to optimize the grid
-    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
-    #     params,
-    #     uo.image_volume_over_parent,
-    #     shape=abstraction_shape,
-    #     domain_lb=domain_lb,
-    #     domain_ub=domain_ub,
-    #     steps=300,
-    #     lr=1e-1,
-    #     grad_clip=1e3,
-    #     print_every=1,
-    #     record_every=50)
-    
-    # # Verify the final system
-    # recall = vt.build_and_verify_from_params(params_opt,
-    #                                            abstraction_shape,
-    #                                            domain_lb,
-    #                                            domain_ub,
-    #                                            init_domain_lb,
-    #                                            init_domain_ub,
-    #                                            gt_reach_fname=gt_reach_fname,
-    #                                            verbose=True,
-    #                                            log_time=True)
-    # print(recall)
+    params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+        params,
+        succ_cost,
+        shape=abstraction_shape,
+        domain_lb=domain_lb,
+        domain_ub=domain_ub,
+        steps=50,
+        lr=1e-1,
+        grad_clip=1e3,
+        print_every=10,
+        record_every=10,
+    )
+    print(f"Optimized successor-bound cost = {cost_history[-1]:.4f}")
+    params = params_opt
+    J_opt = uo.succ_bound(
+        params,
+        shape=abstraction_shape,
+        domain_lb=domain_lb,
+        domain_ub=domain_ub,
+        L=L,
+        p=20.0,
+    )
+    print(f"Post-optimization successor bound J = {J_opt}")
 
+    # End-to-end verification and visualization workflow
+    x_edges, y_edges, theta_edges = uo.extract_grid_params(
+        params,
+        abstraction_shape,
+        domain_lb,
+        domain_ub,
+    )
 
+    init_ids = ua.init_ids_from_aabb(
+        init_domain_lb,
+        init_domain_ub,
+        x_edges,
+        y_edges,
+        theta_edges,
+    )
 
+    kripke_components = ua.build_abstraction(
+        x_edges,
+        y_edges,
+        theta_edges,
+        verbose=False,
+        L=L,
+    )
+    kripke_structure = pmc.Kripke(
+        S=kripke_components["kripke_states"],
+        S0=init_ids,
+        R=list(kripke_components["kripke_transitions"]),
+        L=kripke_components["kripke_labels"],
+    )
 
+    sat_init_states = vt.model_check_kripke(kripke_structure, log_time=True)
+    print(f"Verified safe initial states: {len(sat_init_states)} / {len(init_ids)}")
 
+    with open(gt_reach_fname, "rb") as f:
+        gt_reach_regions = pkl.load(f)
+    ground_truth_check = vt.check_ground_truth_fast(
+        params,
+        abstraction_shape,
+        domain_lb,
+        domain_ub,
+        gt_reach_regions,
+    )
 
+    # Compute recall over initial states from the ground truth labels
+    init_goal_states = [s for s in init_ids if ground_truth_check.get(s, [None])[0] == "goal"]
+    verified_goal_states = [s for s in sat_init_states if ground_truth_check.get(s, [None])[0] == "goal"]
+    recall = (
+        len(verified_goal_states) / len(init_goal_states)
+        if len(init_goal_states) > 0
+        else float('nan')
+    )
+    print(f"Initial-state recall against ground truth: {recall:.4f}")
 
+    fig, _, counts = visualize_slice(
+        x_edges,
+        y_edges,
+        theta_edges,
+        [abstraction_shape[2] // 2],
+        sat_init_states,
+        ground_truth_check=ground_truth_check,
+        title="Verification visualization",
+    )
+    fig.savefig("unicycle-taylor/verification_plot.png", dpi=200, bbox_inches="tight")
+    print(f"Visualization counts: {counts}")
+    plt.show()
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
-    # recalls = []
-    # costs = []
-
-    # for key_int in range(20):
-
-    #     # Initialize abstraction parameters
-    #     key = jax.random.PRNGKey(key_int)
-    #     sigma_u = 1.0
-    #     key, k_u1, k_u2 = jax.random.split(key, 3)
-    #     u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
-    #     u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
-    #     u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
-    #     params = jnp.concatenate([u1, u2, u3])
-
-    #     # Verify the initial system
-    #     gt_reach_fname = "unicycle-taylor/unicycle_gt_reach_regions_100.pkl"
-    #     recall = vt.build_and_verify_from_params(params,
-    #                                             abstraction_shape,
-    #                                             domain_lb,
-    #                                             domain_ub,
-    #                                             init_domain_lb,
-    #                                             init_domain_ub,
-    #                                             gt_reach_fname=gt_reach_fname,
-    #                                             verbose=False)
-    #     recalls.append(recall)
-
-    #     # Compute initial objective and gradient
-    #     val, grad = jax.value_and_grad(uo.image_volume)(
-    #         params,
-    #         shape=abstraction_shape,
-    #         domain_lb=domain_lb,
-    #         domain_ub=domain_ub)
-    #     costs.append(val)
-
-    #     print(f"Cost: {val:.4f}")
-    #     print(f"Recall: {recall}")
-
-    # uni_corr_data = {}
-    # uni_corr_data['recalls'] = recalls
-    # uni_corr_data['costs'] = costs
-    # with open("uni_corr_data.pkl", "wb") as f:
-    #     pkl.dump(uni_corr_data, f)
-
-    # with open("uni_corr_data.pkl", "rb") as f:
-    #     data = pkl.load(f)
-
-    # sat_props = np.array(data['sat_props'])
-    # costs = np.array(data['costs'])
-
-    # print(np.corrcoef(sat_props, costs))
-
-    # plt.scatter(sat_props, costs)
-    # plt.show()
+    # # ### Shivani New  Code to test the workflow
 
 
-    # # Extract the initial grid parameters (edges)
-    # x_edges, y_edges, theta_edges = uo.extract_grid_params(params, abstraction_shape, domain_lb, domain_ub)
-    # edges = [x_edges, y_edges, theta_edges]
 
-    # # Build the initial Kripke components
-    # kripke_components = ua.build_abstraction(x_edges, y_edges, theta_edges, verbose=True)
 
-    # # Evaluate the upward simulation metric
-    # upward_delta = sa.approx_upward_metric(kripke_components,
-    #                                        abstraction_shape,
-    #                                        edges,
-    #                                        delta_iterations=50,
-    #                                        num_samples=50,
-    #                                        tol=1e-1,
-    #                                        verbose=True)
-
-    # # Build the full kripke structure
-    # kripke_structure = pmc.Kripke(S=kripke_components['kripke_states'],
-    #                               S0=init_states,
-    #                               R=list(kripke_components['kripke_transitions']),
-    #                               L=kripke_components['kripke_labels'])
-    
-    # # Run verification
-    # sat_init_states, sat_prop = vt.model_check_kripke(kripke_structure)
-    # print(sat_prop)
