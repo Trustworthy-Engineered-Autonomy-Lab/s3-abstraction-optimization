@@ -49,7 +49,7 @@ if __name__ == "__main__":
     u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
     params = jnp.concatenate([u1, u2, u3])
 
-    # L = usj.estimate_lipschitz_array(domain_lb, domain_ub)
+    # L = usj.quantile_lipschitz_array(domain_lb, domain_ub)
     # J = uo.succ_bound(params,
     #               shape=abstraction_shape,
     #               domain_lb=domain_lb,
@@ -82,28 +82,28 @@ if __name__ == "__main__":
     # print(f"Initial objective value: {val:.4f}")
     # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
-    # Employ gradient descent to optimize the grid
-    params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
-        params,
-        uo.image_volume_over_parent,
-        args=args,
-        steps=300,
-        lr=1e-1,
-        grad_clip=1e3,
-        print_every=10,
-        record_every=50)
+    # # Employ gradient descent to optimize the grid
+    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    #     params,
+    #     uo.image_volume_over_parent,
+    #     args=args,
+    #     steps=300,
+    #     lr=1e-1,
+    #     grad_clip=1e3,
+    #     print_every=10,
+    #     record_every=50)
     
-    # Verify the final system
-    recall = vt.build_and_verify_from_params(params_opt,
-                                               abstraction_shape,
-                                               domain_lb,
-                                               domain_ub,
-                                               init_domain_lb,
-                                               init_domain_ub,
-                                               gt_reach_fname=gt_reach_fname,
-                                               verbose=True,
-                                               log_time=True)
-    print(recall)
+    # # Verify the final system
+    # recall = vt.build_and_verify_from_params(params_opt,
+    #                                            abstraction_shape,
+    #                                            domain_lb,
+    #                                            domain_ub,
+    #                                            init_domain_lb,
+    #                                            init_domain_ub,
+    #                                            gt_reach_fname=gt_reach_fname,
+    #                                            verbose=True,
+    #                                            log_time=True)
+    # print(recall)
 
 
 
