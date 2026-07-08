@@ -11,30 +11,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from unicycle_system import cl_system_jax, wrap_to_pi_jax
-import unicycle_system_jax as usj
-import itertools
+
+
+_cl_system_hessian = jax.hessian(cl_system_jax)
+_batched_cl_system_hessian = jax.vmap(_cl_system_hessian)
 
 # =====================================================================
 # Objective functions
 # =====================================================================
-
-def succ_estimate(params,
-                *,
-                shape,
-                domain_lb,
-                domain_ub,
-                ):
-    
-    L = usj.estimate_lipschitz_array(domain_lb, domain_ub)
-    A = np.eye(3) + L
-
-    n1_internal, n2_internal, n3_internal = shape
-    x1_lo, x2_lo, x3_lo = domain_lb
-    x1_hi, x2_hi, x3_hi = domain_ub
-
-    gap1 = params[0]
-    gap2 = params[1]
-    gap3 = params[2]
 
 def image_volume(
     params,
@@ -234,20 +218,20 @@ def succ_bound(
 
     return jnp.mean(prod)
 
-def inflated_image_volume(
+
+def taylor_remainder(
     params,
     *,
-    shape,
-    domain_lb,
-    domain_ub,
+    args,
+    batch_size=4096,
     ):
     """
-    Sum of post-image AABB volume inflated with Lagrange bound for each abstract cell.
+    Sum the per-cell Taylor remainder proxy with batched JAX Hessians.
     """
 
-    n1_internal, n2_internal, n3_internal = shape
-    x1_lo, x2_lo, x3_lo = domain_lb
-    x1_hi, x2_hi, x3_hi = domain_ub
+    n1_internal, n2_internal, n3_internal = args['shape']
+    x1_lo, x2_lo, x3_lo = args['domain_lb']
+    x1_hi, x2_hi, x3_hi = args['domain_ub']
     
     params = jnp.asarray(params)
     u1 = params[:n1_internal]
@@ -259,54 +243,54 @@ def inflated_image_volume(
     x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
     x3_params = make_lines_from_gaps(u3, x3_lo, x3_hi)
 
-    # Build all cells' corners: (n1, n2, 4, 2)
-    x1_los = x1_params[:-1]
-    x1_his = x1_params[1:]
-    x2_los = x2_params[:-1]
-    x2_his = x2_params[1:]
-    x3_los = x3_params[:-1]
-    x3_his = x3_params[1:]
+    x1_widths = jnp.diff(x1_params)
+    x2_widths = jnp.diff(x2_params)
+    x3_widths = jnp.diff(x3_params)
 
-    n1 = x1_los.shape[0]
-    n2 = x2_los.shape[0]
-    n3 = x3_los.shape[0]
-    x1_lo_grid = jnp.broadcast_to(x1_los[:, None, None], (n1, n2, n3))
-    x1_hi_grid = jnp.broadcast_to(x1_his[:, None, None], (n1, n2, n3))
-    x2_lo_grid = jnp.broadcast_to(x2_los[None, :, None], (n1, n2, n3))
-    x2_hi_grid = jnp.broadcast_to(x2_his[None, :, None], (n1, n2, n3))
-    x3_lo_grid = jnp.broadcast_to(x3_los[None, None, :], (n1, n2, n3))
-    x3_hi_grid = jnp.broadcast_to(x3_his[None, None, :], (n1, n2, n3))
+    x1_centers = 0.5 * (x1_params[:-1] + x1_params[1:])
+    x2_centers = 0.5 * (x2_params[:-1] + x2_params[1:])
+    x3_centers = 0.5 * (x3_params[:-1] + x3_params[1:])
 
-    # All 8 corners per cell: (n1, n2, n3, 8, 3)
-    corners = jnp.stack(
-        [
-            jnp.stack([x1_lo_grid, x2_lo_grid, x3_lo_grid], axis=-1),
-            jnp.stack([x1_lo_grid, x2_lo_grid, x3_hi_grid], axis=-1),
-            jnp.stack([x1_lo_grid, x2_hi_grid, x3_lo_grid], axis=-1),
-            jnp.stack([x1_lo_grid, x2_hi_grid, x3_hi_grid], axis=-1),
-            jnp.stack([x1_hi_grid, x2_lo_grid, x3_lo_grid], axis=-1),
-            jnp.stack([x1_hi_grid, x2_lo_grid, x3_hi_grid], axis=-1),
-            jnp.stack([x1_hi_grid, x2_hi_grid, x3_lo_grid], axis=-1),
-            jnp.stack([x1_hi_grid, x2_hi_grid, x3_hi_grid], axis=-1),
-        ],
-        axis=-2,
+    centroids = jnp.stack(
+        jnp.meshgrid(x1_centers, x2_centers, x3_centers, indexing="ij"),
+        axis=-1,
+    ).reshape((-1, 3))
+    half_spans = 0.5 * jnp.stack(
+        jnp.meshgrid(x1_widths, x2_widths, x3_widths, indexing="ij"),
+        axis=-1,
+    )
+    max_displacements = jnp.linalg.norm(half_spans, axis=-1).reshape((-1,))
+
+    batch_size = int(batch_size)
+    num_cells = centroids.shape[0]
+    pad = (-num_cells) % batch_size
+    padded_num_cells = num_cells + pad
+
+    centroids = jnp.pad(centroids, ((0, pad), (0, 0)))
+    max_displacements = jnp.pad(max_displacements, (0, pad))
+    valid_mask = jnp.arange(padded_num_cells) < num_cells
+
+    centroid_batches = centroids.reshape((-1, batch_size, 3))
+    displacement_batches = max_displacements.reshape((-1, batch_size))
+    mask_batches = valid_mask.reshape((-1, batch_size))
+
+    def accumulate_batch(total, batch):
+        centroid_batch, displacement_batch, mask_batch = batch
+        hessians = _batched_cl_system_hessian(centroid_batch)
+        eigvals = jnp.linalg.eigvalsh(hessians)
+        spec_norms = jnp.max(jnp.abs(eigvals), axis=-1)
+        spec_norms = jnp.max(spec_norms, axis=-1)
+        contributions = 0.5 * spec_norms * displacement_batch
+        contributions = jnp.where(mask_batch, contributions, jnp.zeros_like(contributions))
+        return total + jnp.sum(contributions), None
+
+    total_taylor_remainder, _ = jax.lax.scan(
+        accumulate_batch,
+        jnp.asarray(0.0, dtype=params.dtype),
+        (centroid_batches, displacement_batches, mask_batches),
     )
 
-    flat_corners = corners.reshape((-1, 3))
-    flat_next = jax.vmap(cl_system_jax)(flat_corners)
-    x_next = flat_next.reshape(corners.shape)
-
-    x1 = x_next[..., 0]
-    x2 = x_next[..., 1]
-    x3 = x_next[..., 2]
-    x1_lo_post = jnp.min(x1, axis=-1)
-    x1_hi_post = jnp.max(x1, axis=-1)
-    x2_lo_post = jnp.min(x2, axis=-1)
-    x2_hi_post = jnp.max(x2, axis=-1)
-    theta_span = theta_min_arc_length(x3)
-    img_volume = (x1_hi_post - x1_lo_post) * (x2_hi_post - x2_lo_post) * theta_span
-
-    return jnp.sum(img_volume)
+    return total_taylor_remainder
 
 
 # =====================================================================

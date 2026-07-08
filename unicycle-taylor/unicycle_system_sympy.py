@@ -428,15 +428,20 @@ def lagrange_error_bounds_grid(x_edges, y_edges, theta_edges, *, resolution=10):
 
 if __name__ == "__main__":
 
-    num_x_intervals = 100
-    num_y_intervals = 100
-    num_theta_intervals = 100
+    # num_x_intervals = 100
+    # num_y_intervals = 100
+    # num_theta_intervals = 100
 
-    x_edges     = np.linspace(0.0, 50.0, num_x_intervals + 1)
-    y_edges     = np.linspace(0.0, 50.0, num_y_intervals + 1)
-    theta_edges = np.linspace(-np.pi, np.pi, num_theta_intervals + 1)
+    # x_edges     = np.linspace(0.0, 50.0, num_x_intervals + 1)
+    # y_edges     = np.linspace(0.0, 50.0, num_y_intervals + 1)
+    # theta_edges = np.linspace(-np.pi, np.pi, num_theta_intervals + 1)
 
-    error_bounds = lagrange_error_bounds_grid(x_edges, y_edges, theta_edges)
+    # error_bounds = lagrange_error_bounds_grid(x_edges, y_edges, theta_edges)
+
+    H = _hessian_vectorized(0.0, 0.0, 0.0)
+    eigvals = np.linalg.eigvalsh(H)                 # (N, 3)
+    spec_norm = np.max(np.abs(eigvals)) 
+    print(spec_norm)
 
     # import matplotlib.pyplot as plt
 
