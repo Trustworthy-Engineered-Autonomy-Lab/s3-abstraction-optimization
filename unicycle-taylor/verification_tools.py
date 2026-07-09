@@ -32,8 +32,8 @@ def model_check_kripke(kripke_structure, log_time=False):
     that are verified.
     """
 
-    # phi = 'A (safe U goal)'
-    phi = 'A F goal'
+    phi = 'A (safe U goal)'
+    # phi = 'A F goal'
     if log_time:
         start_time = time.perf_counter()
     sat = CTL.modelcheck(kripke_structure, phi)

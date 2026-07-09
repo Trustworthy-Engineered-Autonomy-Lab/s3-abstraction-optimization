@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [121, 102, 42]
+    abstraction_shape = [80, 80, 80]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
@@ -49,18 +49,18 @@ if __name__ == "__main__":
     u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
     params = jnp.concatenate([u1, u2, u3])
 
-    # J = uo.taylor_remainder(
+    args = {}
+    args['shape'] = abstraction_shape
+    args['domain_lb'] = domain_lb
+    args['domain_ub'] = domain_ub
+    # J = uo.noninflated_image_volume(
     #     params,
-    #     shape=abstraction_shape,
-    #     domain_lb=domain_lb,
-    #     domain_ub=domain_ub
+    #     args=args
     # )
     # print(J)
-    # val, grad = jax.value_and_grad(uo.taylor_remainder)(
+    # val, grad = jax.value_and_grad(uo.noninflated_image_volume)(
     #     params,
-    #     shape=abstraction_shape,
-    #     domain_lb=domain_lb,
-    #     domain_ub=domain_ub)
+    #     args=args)
     # print(f"Initial objective value: {val:.4f}")
     # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
@@ -86,12 +86,12 @@ if __name__ == "__main__":
     # print(recall)
 
     # Compute initial objective and gradient
-    args = {}
-    args['shape'] = abstraction_shape
-    args['domain_lb'] = domain_lb
-    args['domain_ub'] = domain_ub
+    # args = {}
+    # args['shape'] = abstraction_shape
+    # args['domain_lb'] = domain_lb
+    # args['domain_ub'] = domain_ub
     # args['L'] = L
-    # val, grad = jax.value_and_grad(uo.taylor_remainder)(
+    # val, grad = jax.value_and_grad(uo.image_volume)(
     #     params,
     #     args=args)
     # print(f"Initial objective value: {val:.4f}")
@@ -100,15 +100,15 @@ if __name__ == "__main__":
     # Employ gradient descent to optimize the grid
     params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
         params,
-        uo.image_volume,
+        uo.noninflated_image_volume,
         args=args,
         steps=500,
-        lr=5e-3,
+        lr=1e-3,
         grad_clip=1e3,
         print_every=1,
         record_every=100)
     
-    # # Verify the final system
+    # Verify the final system
     recall = vt.build_and_verify_from_params(params_opt,
                                                abstraction_shape,
                                                domain_lb,

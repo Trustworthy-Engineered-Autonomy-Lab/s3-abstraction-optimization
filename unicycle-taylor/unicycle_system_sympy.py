@@ -14,6 +14,8 @@ from itertools import product
 import time
 from pathlib import Path
 import pickle
+import mpmath as mp
+from mpmath import iv
 
 
 _LAMBDIFY_MODULES = [
@@ -24,6 +26,35 @@ _LAMBDIFY_MODULES = [
     'numpy',
 ]
 
+def iv_tanh(x):
+    return iv.mpf([mp.tanh(x.a), mp.tanh(x.b)])
+
+
+def iv_atan(x):
+    return iv.atan2(x, iv.mpf([1.0, 1.0]))
+
+
+def as_interval(value):
+    if hasattr(value, 'a') and hasattr(value, 'b'):
+        return value
+
+    scalar = float(value)
+    return iv.mpf([scalar, scalar])
+
+_INTERVAL_MODULES = [
+    {
+        "sin": iv.sin,
+        "cos": iv.cos,
+        "tan": iv.tan,
+        "atan": iv_atan,
+        "atan2": iv.atan2,
+        "exp": iv.exp,
+        "sqrt": iv.sqrt,
+        "tanh": iv_tanh,
+        "DiracDelta": lambda x: iv.mpf([0, 0]),
+        "Heaviside": lambda x: iv.mpf([0, 1]),
+    }
+]
 
 # =====================================================================
 # Helper functions
@@ -33,7 +64,27 @@ def wrap_to_pi_diff(angle):
     """Smooth wrap to [-pi, pi] via arctan(tan()) — differentiable everywhere
     except at ±pi boundaries, which are never visited in practice."""
     return 2 * sp.atan(sp.tan(angle / 2))
+    # return angle
 
+def wrap_to_pi_numeric(angle):
+    return (angle + np.pi) % (2 * np.pi) - np.pi
+
+def interval_mul(a_lo, a_hi, b_lo, b_hi):
+    a_spans_zero = a_lo <= 0.0 <= a_hi
+    b_spans_zero = b_lo <= 0.0 <= b_hi
+
+    if ((not np.isfinite(a_lo)) or (not np.isfinite(a_hi))) and b_spans_zero:
+        return -np.inf, np.inf
+    if ((not np.isfinite(b_lo)) or (not np.isfinite(b_hi))) and a_spans_zero:
+        return -np.inf, np.inf
+
+    vals = [
+        a_lo * b_lo,
+        a_lo * b_hi,
+        a_hi * b_lo,
+        a_hi * b_hi,
+    ]
+    return min(vals), max(vals)
 
 # =====================================================================
 # Symbolic unicycle plant
@@ -231,6 +282,41 @@ def _build_funcs_from_cse(state_vars, cse_data, output_shape=None):
     return fast_eval
 
 
+def _build_interval_func_from_cse(state_vars, cse_data, output_shape):
+    substitutions, reduced_exprs = cse_data
+
+    cse_vars  = [s for s, _ in substitutions]
+    cse_exprs = [e for _, e in substitutions]
+
+    cse_funcs = []
+    for i, ex in enumerate(cse_exprs):
+        available = list(state_vars) + cse_vars[:i]
+        cse_funcs.append(sp.lambdify(available, ex, modules=_INTERVAL_MODULES))
+
+    all_args = list(state_vars) + cse_vars
+    out_func = sp.lambdify(all_args, reduced_exprs, modules=_INTERVAL_MODULES)
+
+    def eval_interval(lb, ub):
+        env = [
+            iv.mpf([float(lb[0]), float(ub[0])]),
+            iv.mpf([float(lb[1]), float(ub[1])]),
+            iv.mpf([float(lb[2]), float(ub[2])]),
+        ]
+
+        for f in cse_funcs:
+            env.append(f(*env))
+
+        raw = out_func(*env)
+
+        out = np.empty(output_shape, dtype=object)
+        for q, val in enumerate(raw):
+            out.flat[q] = as_interval(val)
+
+        return out
+
+    return eval_interval
+
+
 def _load_or_derive():
     """
     Loads cached CSE data if available; otherwise derives symbolic Jacobian and
@@ -247,17 +333,21 @@ def _load_or_derive():
         with open(_CACHE_PATH, 'wb') as f:
             pickle.dump((F, state_vars, J_cse, H_cse), f)
 
-    # Re-lambdify from CSE data (fast — no large expression printing)
+    # Re-lambdify from CSE data
     print("[USS] Lambdifying from CSE data...", flush=True)
     J_func = _build_funcs_from_cse(state_vars, J_cse, output_shape=(3, 3))
     H_func = _build_funcs_from_cse(state_vars, H_cse, output_shape=(3, 3, 3))
 
-    return F, state_vars, J_func, H_func
+    return F, state_vars, J_func, H_func, J_cse, H_cse
  
 
-_F, _STATE_VARS, _J_FUNC, _H_FUNC = _load_or_derive()
+_F, _STATE_VARS, _J_FUNC, _H_FUNC, _J_CSE, _H_CSE = _load_or_derive()
 _F_FUNC = sp.lambdify(_STATE_VARS, list(_F), modules=_LAMBDIFY_MODULES)
-
+_H_INTERVAL_FUNC = _build_interval_func_from_cse(
+    _STATE_VARS,
+    _H_CSE,
+    output_shape=(3, 3, 3)
+)
 
 # =====================================================================
 # Jacobian and Hessian evaluation functions
@@ -280,6 +370,17 @@ def hessian(state):
     px, py, theta = state
     return np.array(_H_FUNC(px, py, theta), dtype=float)
 
+def interval_hessian(lb, ub):
+    H_iv = _H_INTERVAL_FUNC(lb, ub)
+
+    H_lo = np.empty((3, 3, 3), dtype=float)
+    H_hi = np.empty((3, 3, 3), dtype=float)
+
+    for idx in np.ndindex(3, 3, 3):
+        H_lo[idx] = float(H_iv[idx].a)
+        H_hi[idx] = float(H_iv[idx].b)
+
+    return H_lo, H_hi
 
 def cl_system_numeric(state):
     """
@@ -421,6 +522,53 @@ def lagrange_error_bounds_grid(x_edges, y_edges, theta_edges, *, resolution=10):
 
     return error_bounds
 
+# =====================================================================
+# Faster error bounds
+# =====================================================================
+
+def taylor_remainder(lb, ub):
+    """
+    Computes interval Taylor remainder R for first-order Taylor model.
+    """
+
+    H_lo, H_hi = interval_hessian(lb, ub) # evaluate interval Hessian
+
+    lb = np.asarray(lb, dtype=float)
+    ub = np.asarray(ub, dtype=float)
+
+    h = 0.5 * (ub - lb)
+
+    R_lo = np.zeros(3)
+    R_hi = np.zeros(3)
+
+    for i in range(3):
+        lo_sum = 0.0
+        hi_sum = 0.0
+
+        for j in range(3):
+            for k in range(3):
+
+                # Hessian interval
+                a_lo = H_lo[i, j, k]
+                a_hi = H_hi[i, j, k]
+
+                # Displacement product interval:
+                if j == k:
+                    b_lo = 0.0
+                    b_hi = h[j] ** 2
+                else:
+                    b_lo = -h[j] * h[k]
+                    b_hi =  h[j] * h[k]
+
+                t_lo, t_hi = interval_mul(a_lo, a_hi, b_lo, b_hi)
+
+                lo_sum += 0.5 * t_lo
+                hi_sum += 0.5 * t_hi
+
+        R_lo[i] = lo_sum
+        R_hi[i] = hi_sum
+
+    return R_lo, R_hi
 
 # =====================================================================
 # Section for testing the above methods
@@ -438,10 +586,25 @@ if __name__ == "__main__":
 
     # error_bounds = lagrange_error_bounds_grid(x_edges, y_edges, theta_edges)
 
-    H = _hessian_vectorized(0.0, 0.0, 0.0)
-    eigvals = np.linalg.eigvalsh(H)                 # (N, 3)
-    spec_norm = np.max(np.abs(eigvals)) 
-    print(spec_norm)
+    lb = np.array([15.935053,  14.353392,  -3.1415927])
+    ub = np.array([16.979568,  15.406239,  -3.1415927+0.2])
+    H_lo, H_hi = interval_hessian(lb, ub)
+    R_lo, R_hi = taylor_remainder(lb, ub)
+    print(R_lo)
+    print(R_hi)
+    # eigvals = np.linalg.eigvalsh(H)                 # (N, 3)
+    # spec_norm = np.max(np.abs(eigvals)) 
+    # print(H[0, :, :])
+
+    # H_lo, H_hi = interval_hessian(lb, ub)
+
+    # M = np.maximum(np.abs(H_lo), np.abs(H_hi))
+
+    # print("theta-output Hessian magnitude:")
+    # print(M[2, :, :])
+
+    # idx = np.unravel_index(np.argmax(M[2, :, :]), (3, 3))
+    # print("worst theta Hessian entry:", idx, M[2, idx[0], idx[1]])
 
     # import matplotlib.pyplot as plt
 

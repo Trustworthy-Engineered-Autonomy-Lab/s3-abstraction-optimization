@@ -49,9 +49,6 @@ def build_abstraction(
     kripke_states = list(range(n_kripke_states))  # last state is out-of-bounds
     kripke_transitions = set()
     kripke_labels = {}
-
-    # Pre-compute Lagrange error bounds in batches for efficiency
-    error_bounds = uss.lagrange_error_bounds_grid(x_edges, y_edges, theta_edges)
     
     # Iterate over cells and determine successors w/Taylor reachability
     if verbose:
@@ -90,15 +87,24 @@ def build_abstraction(
                 next_lower_bounds = linearized_next_verts.min(axis=0)
                 next_upper_bounds = linearized_next_verts.max(axis=0)
 
-                # Determine Lagrange error bounds and compute Hammard product of AABB
-                error_bound = error_bounds[i, j, k, :]
-                next_lower_bounds -= error_bound
-                next_upper_bounds += error_bound
-                all_next_verts = [list(combo) for combo in product(*zip(next_lower_bounds, next_upper_bounds))]
-                all_next_verts = np.array(all_next_verts)
+                # Compute Taylor remainder
+                R_lo, R_hi = uss.taylor_remainder(lb=lower_bounds,
+                                                  ub=upper_bounds)
+                if abs(R_lo[2]) > 1 or abs(R_hi[2]) > 1:
+                    R_lo[2] = 0.0
+                    R_hi[2] = 0.0
 
+                # Inflate AABB by Taylor remainder
+                next_lower_bounds += R_lo
+                next_upper_bounds += R_hi
+                
                 # Compute theta image interval(s) using minimal circular arc.
-                theta_intervals = theta_min_arc_intervals(all_next_verts[:, 2])
+                if np.isfinite(next_lower_bounds[2]) and np.isfinite(next_upper_bounds[2]):
+                    all_next_verts = [list(combo) for combo in product(*zip(next_lower_bounds, next_upper_bounds))]
+                    all_next_verts = np.array(all_next_verts)
+                    theta_intervals = theta_min_arc_intervals(all_next_verts[:, 2])
+                else:
+                    theta_intervals = [(theta_edges[0], theta_edges[-1])]
 
                 # Identify successor cells
                 x_min = next_lower_bounds[0]
@@ -420,11 +426,11 @@ def init_cells_to_ids(
 
 if __name__ == "__main__":
 
-    abstraction_shape = [50, 50, 20]
+    abstraction_shape = [20, 20, 20]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 40.0, np.pi])
 
-    _, kripke_components = build_abstraction(abstraction_shape, domain_lb, domain_ub)
+    # _, kripke_components = build_abstraction(abstraction_shape, domain_lb, domain_ub, verbose=True)
 
     # # Save the Kripke structure components for later use
     # with open("kripke_components.pkl", "wb") as f:

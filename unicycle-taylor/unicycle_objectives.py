@@ -12,9 +12,23 @@ import jax.numpy as jnp
 import numpy as np
 from unicycle_system import cl_system_jax, wrap_to_pi_jax
 
-
 _cl_system_hessian = jax.hessian(cl_system_jax)
+_cl_system_jacobian = jax.jacfwd(cl_system_jax)
 _batched_cl_system_hessian = jax.vmap(_cl_system_hessian)
+_batched_cl_system_jacobian = jax.vmap(_cl_system_jacobian)
+_corner_signs = jnp.asarray(
+    [
+        [-1.0, -1.0, -1.0],
+        [-1.0, -1.0,  1.0],
+        [-1.0,  1.0, -1.0],
+        [-1.0,  1.0,  1.0],
+        [ 1.0, -1.0, -1.0],
+        [ 1.0, -1.0,  1.0],
+        [ 1.0,  1.0, -1.0],
+        [ 1.0,  1.0,  1.0],
+    ],
+    dtype=jnp.float32,
+)
 
 # =====================================================================
 # Objective functions
@@ -292,6 +306,154 @@ def taylor_remainder(
 
     return total_taylor_remainder
 
+
+def noninflated_image_volume(
+    params,
+    *,
+    args,
+    batch_size=4096,
+    ):
+    """
+    Sum of all linearized AABB image volumes pre-inflation.
+    """
+
+    n1_internal, n2_internal, n3_internal = args['shape']
+    x1_lo, x2_lo, x3_lo = args['domain_lb']
+    x1_hi, x2_hi, x3_hi = args['domain_ub']
+    
+    params = jnp.asarray(params)
+    u1 = params[:n1_internal]
+    u2 = params[n1_internal : n1_internal + n2_internal]
+    u3 = params[n1_internal + n2_internal : n1_internal + n2_internal + n3_internal]
+
+    # Convert gap-params -> actual y-line locations
+    x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
+    x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
+    x3_params = make_lines_from_gaps(u3, x3_lo, x3_hi)
+
+    x1_widths = jnp.diff(x1_params)
+    x2_widths = jnp.diff(x2_params)
+    x3_widths = jnp.diff(x3_params)
+
+    x1_centers = 0.5 * (x1_params[:-1] + x1_params[1:])
+    x2_centers = 0.5 * (x2_params[:-1] + x2_params[1:])
+    x3_centers = 0.5 * (x3_params[:-1] + x3_params[1:])
+
+    centroids = jnp.stack(
+        jnp.meshgrid(x1_centers, x2_centers, x3_centers, indexing="ij"),
+        axis=-1,
+    ).reshape((-1, 3))
+    half_spans = 0.5 * jnp.stack(
+        jnp.meshgrid(x1_widths, x2_widths, x3_widths, indexing="ij"),
+        axis=-1,
+    ).reshape((-1, 3))
+
+    batch_size = int(batch_size)
+    num_cells = centroids.shape[0]
+    pad = (-num_cells) % batch_size
+    padded_num_cells = num_cells + pad
+
+    centroids = jnp.pad(centroids, ((0, pad), (0, 0)))
+    half_spans = jnp.pad(half_spans, ((0, pad), (0, 0)))
+    valid_mask = jnp.arange(padded_num_cells) < num_cells
+
+    centroid_batches = centroids.reshape((-1, batch_size, 3))
+    half_span_batches = half_spans.reshape((-1, batch_size, 3))
+    mask_batches = valid_mask.reshape((-1, batch_size))
+
+    def accumulate_batch(total, batch):
+        centroid_batch, half_span_batch, mask_batch = batch
+        jacobians = _batched_cl_system_jacobian(centroid_batch)
+        centers_next = jax.vmap(cl_system_jax)(centroid_batch)
+
+        corner_offsets = half_span_batch[:, None, :] * _corner_signs[None, :, :]
+        linearized_next_verts = centers_next[:, None, :] + jnp.einsum(
+            "nij,nvj->nvi",
+            jacobians,
+            corner_offsets,
+        )
+
+        next_lower_bounds = jnp.min(linearized_next_verts, axis=1)
+        next_upper_bounds = jnp.max(linearized_next_verts, axis=1)
+        side_lengths = next_upper_bounds - next_lower_bounds
+        volumes = jnp.prod(side_lengths, axis=-1)
+        volumes = jnp.where(mask_batch, volumes, jnp.zeros_like(volumes))
+        return total + jnp.sum(volumes), None
+
+    total_volume, _ = jax.lax.scan(
+        accumulate_batch,
+        jnp.asarray(0.0, dtype=params.dtype),
+        (centroid_batches, half_span_batches, mask_batches),
+    )
+
+    return total_volume
+
+
+# def noninflated_image_volume(
+#     params,
+#     *,
+#     args,
+#     ):
+#     """
+#     Sum of all linearized AABB image volumes pre-inflation.
+#     """
+
+#     n1_internal, n2_internal, n3_internal = args['shape']
+#     x1_lo, x2_lo, x3_lo = args['domain_lb']
+#     x1_hi, x2_hi, x3_hi = args['domain_ub']
+    
+#     params = jnp.asarray(params)
+#     u1 = params[:n1_internal]
+#     u2 = params[n1_internal : n1_internal + n2_internal]
+#     u3 = params[n1_internal + n2_internal : n1_internal + n2_internal + n3_internal]
+
+#     # Convert gap-params -> actual y-line locations
+#     x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
+#     x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
+#     x3_params = make_lines_from_gaps(u3, x3_lo, x3_hi)
+
+#     # Iterate over cells
+#     total_volume = 0.0
+#     count = 0
+#     for i in range(n1_internal):
+#         x1_lo, x1_hi = x1_params[i], x1_params[i+1]
+#         for j in range(n2_internal):
+#             x2_lo, x2_hi = x2_params[j], x2_params[j+1]
+#             for k in range(n3_internal):
+#                 x3_lo, x3_hi = x3_params[k], x3_params[k+1]
+
+#                 lower_bounds = np.array([x1_lo, x2_lo, x3_lo])
+#                 upper_bounds = np.array([x1_hi, x2_hi, x3_hi])
+#                 all_verts = [list(combo) for combo in product(*zip(lower_bounds, upper_bounds))]
+#                 all_verts = np.array(all_verts)
+
+#                 # Compute cell centroid and evaluate Jacobian there; compute post-image AABB
+#                 centroid = (lower_bounds + upper_bounds) / 2.0
+#                 J = uss.jacobian(centroid)
+#                 f_center = uss.cl_system_numeric(centroid)
+#                 linearized_next_verts = np.array([
+#                     uss.linear_cl_system(vert, centroid, J=J, f_center=f_center)
+#                     for vert in all_verts
+#                 ])
+#                 next_lower_bounds = linearized_next_verts.min(axis=0)
+#                 next_upper_bounds = linearized_next_verts.max(axis=0)
+
+#                 # Compute Taylor remainder and inflate AABB
+#                 R_lo, R_hi = uss.taylor_remainder(lb=lower_bounds,
+#                                                   ub=upper_bounds)
+#                 next_lower_bounds += R_lo
+#                 next_upper_bounds += R_hi
+
+#                 side_lengths = next_upper_bounds - next_lower_bounds
+#                 volume = side_lengths[0]*side_lengths[1]*side_lengths[2]
+#                 total_volume += volume
+
+#                 if count % 1000 == 0:
+#                     print(f"iter={count}, total_volume={total_volume}")
+#                 count += 1
+
+#     return total_volume
+                
 
 # =====================================================================
 # JAX-compatible helper methods

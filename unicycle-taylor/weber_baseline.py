@@ -95,7 +95,7 @@ if __name__ == "__main__":
 
     # Optimize and determine abstraction shape
     eta, E_pred, res = optimize_grid_widths(L, 0.03068)
-    shape = [int(np.ceil((ub - lb)/e)) for ub, lb, e in zip(domain_ub, domain_lb, eta)]
+    shape = [int(np.floor((ub - lb)/e)) for ub, lb, e in zip(domain_ub, domain_lb, eta)]
     print(f"Predicted avg. succ/state: {E_pred}")
     print(f"Optimal shape: {shape}")
     
