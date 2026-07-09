@@ -32,7 +32,8 @@ def model_check_kripke(kripke_structure, log_time=False):
     that are verified.
     """
 
-    phi = 'A (safe U goal)'
+    # phi = 'A (safe U goal)'
+    phi = 'A F goal'
     if log_time:
         start_time = time.perf_counter()
     sat = CTL.modelcheck(kripke_structure, phi)
@@ -127,7 +128,7 @@ def build_and_verify_from_params(
 # Concrete satisfaction analysis
 # =====================================================================
 
-def get_gt_reach_regions(domain_lb, domain_ub, grid_resolution=101, verbose=False):
+def get_gt_reach_avoid_regions(domain_lb, domain_ub, grid_resolution=101, verbose=False):
 
     # Environment details
     obs_center = np.array([25.0, 25.0])
@@ -201,6 +202,73 @@ def get_gt_reach_regions(domain_lb, domain_ub, grid_resolution=101, verbose=Fals
                 count += 1
     
     return gt_reach_regions
+
+
+def get_gt_reach_regions(domain_lb, domain_ub, grid_resolution=101, verbose=False):
+
+    # Environment details
+    obs_center = np.array([25.0, 25.0])
+    obs_radius = 5.0
+    goal_center = np.array([40.0, 20.0])
+    goal_radius = 8.0
+
+    # Unpack domain parameters
+    x1_min, x2_min, x3_min = domain_lb
+    x1_max, x2_max, x3_max = domain_ub
+
+    # Initialize a uniform grid over the x-domain
+    x1_vals = np.linspace(x1_min, x1_max, grid_resolution)
+    x2_vals = np.linspace(x2_min, x2_max, grid_resolution)
+    x3_vals = np.linspace(x3_min, x3_max, grid_resolution)
+
+    # Iterate through each grid cell; classify as 'fail', 'goal', or 'unk'
+    if verbose:
+        print("Executing fixed grid reachability...")
+        count = 0
+    total_cells = (grid_resolution - 1) ** 3
+    gt_reach_regions = {}
+    for i in range(grid_resolution - 1):
+        x1_lo, x1_hi = x1_vals[i], x1_vals[i+1]
+        for j in range(grid_resolution - 1):
+            x2_lo, x2_hi = x2_vals[j], x2_vals[j+1]
+            for k in range(grid_resolution - 1):
+                x3_lo, x3_hi = x3_vals[k], x3_vals[k+1]
+
+                # Define cell corners
+                verts = np.array(
+                    [
+                        [x1_lo, x2_lo, x3_lo],
+                        [x1_lo, x2_hi, x3_lo],
+                        [x1_hi, x2_hi, x3_lo],
+                        [x1_hi, x2_lo, x3_lo],
+                        [x1_lo, x2_lo, x3_hi],
+                        [x1_lo, x2_hi, x3_hi],
+                        [x1_hi, x2_hi, x3_hi],
+                        [x1_hi, x2_lo, x3_hi],
+                    ]
+                )
+
+                # Push vertices through dynamics until any fail or all succeed
+                max_steps = 5_000
+                reached_terminal = False
+                for _ in range(max_steps):
+
+                    if ua.is_goal_state(verts, goal_center, goal_radius):
+                        gt_reach_regions[(i, j, k)] = 'goal'
+                        reached_terminal = True
+                        break
+
+                    verts = np.array([us.cl_system(vert) for vert in verts])
+
+                if not reached_terminal:
+                    gt_reach_regions[(i, j, k)] = 'unk'
+                
+                if verbose and (count % 10000 == 0):
+                    print(f"    > Processed {count} / {total_cells} regions...")
+                count += 1
+    
+    return gt_reach_regions
+
 
 def check_ground_truth_fast(
         params,
@@ -324,25 +392,30 @@ if __name__ == "__main__":
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
-    # Define the initial state subset domain
-    init_domain_lb = np.array([0.0, 0.0, -np.pi/4])
-    init_domain_ub = np.array([50.0, 50.0, np.pi/4])
+    gt_reach_regions = get_gt_reach_regions(domain_lb, domain_ub, verbose=True)
 
-    key = jax.random.PRNGKey(0)
-    sigma_u = 1.0
-    key, k_u1, k_u2 = jax.random.split(key, 3)
-    u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
-    u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
-    u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
-    params = jnp.concatenate([u1, u2, u3])
+    with open("unicycle-taylor/unicycle_reach_regions.pkl", "wb") as f:
+        pkl.dump(gt_reach_regions, f)
 
-    gt_reach_fname = "unicycle-taylor/unicycle_gt_reach_regions_100.pkl"
-    recall = build_and_verify_from_params(params,
-                                          abstraction_shape,
-                                          domain_lb,
-                                          domain_ub,
-                                          init_domain_lb,
-                                          init_domain_ub,
-                                          gt_reach_fname=gt_reach_fname,
-                                          verbose=True)
-    print(recall)
+    # # Define the initial state subset domain
+    # init_domain_lb = np.array([0.0, 0.0, -np.pi/4])
+    # init_domain_ub = np.array([50.0, 50.0, np.pi/4])
+
+    # key = jax.random.PRNGKey(0)
+    # sigma_u = 1.0
+    # key, k_u1, k_u2 = jax.random.split(key, 3)
+    # u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
+    # u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
+    # u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
+    # params = jnp.concatenate([u1, u2, u3])
+
+    # gt_reach_fname = "unicycle-taylor/unicycle_gt_reach_regions_100.pkl"
+    # recall = build_and_verify_from_params(params,
+    #                                       abstraction_shape,
+    #                                       domain_lb,
+    #                                       domain_ub,
+    #                                       init_domain_lb,
+    #                                       init_domain_ub,
+    #                                       gt_reach_fname=gt_reach_fname,
+    #                                       verbose=True)
+    # print(recall)
