@@ -7,7 +7,7 @@
 # Libraries
 # =====================================================================
 
-from unicycle_system_jax import quantile_lipschitz_array
+import unicycle_system_jax as usj
 import numpy as np
 from scipy.optimize import minimize
 import jax
@@ -61,7 +61,7 @@ def optimize_grid_widths(
         constraints=[constraints],
         bounds=None,
         method="SLSQP",
-        options={"ftol": 1e-12, "maxiter": 1000},
+        options={"ftol": 1e-12, "maxiter": 5000},
     )
 
     eta = np.exp(res.x)
@@ -88,13 +88,13 @@ if __name__ == "__main__":
     init_domain_ub = np.array([50.0, 50.0, np.pi/4])
 
     # Evaluate Lipschitz constant array
-    L = quantile_lipschitz_array(
+    L = usj.quantile_lipschitz_array(
         domain_lb=domain_lb,
         domain_ub=domain_ub
     )
 
     # Optimize and determine abstraction shape
-    eta, E_pred, res = optimize_grid_widths(L, 0.03068)
+    eta, E_pred, res = optimize_grid_widths(L, 0.12566)
     shape = [int(np.round((ub - lb)/e)) for ub, lb, e in zip(domain_ub, domain_lb, eta)]
     print(f"Predicted avg. succ/state: {E_pred}")
     print(f"Optimal shape: {shape}")
