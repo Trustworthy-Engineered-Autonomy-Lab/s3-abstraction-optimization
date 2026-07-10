@@ -10,10 +10,12 @@
 
 import numpy as np
 import synthetic_abstraction as sa
+import synthetic_optimizers as s_opt
 import time
 import jax
 import jax.numpy as jnp
 import verification_tools as vt
+import synthetic_objectives as so
 
 
 # =====================================================================
@@ -25,7 +27,7 @@ if __name__ == "__main__":
     gt_reach_fname = "synthetic-v3/synthetic_reach_regions.pkl"
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [50, 50]
+    abstraction_shape = [300, 300]
     domain_lb = np.array([-10.0, -10.0])
     domain_ub = np.array([10.0, 10.0])
 
@@ -43,7 +45,42 @@ if __name__ == "__main__":
     u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
     params = jnp.concatenate([u1, u2])
 
-    recall = vt.build_and_verify_from_params(params,
+    args = {}
+    args['shape'] = abstraction_shape
+    args['domain_lb'] = domain_lb
+    args['domain_ub'] = domain_ub
+
+    # J = so.image_area(params, args=args)
+    # print(J)
+    # val, grad = jax.value_and_grad(so.image_area)(
+    #     params,
+    #     args=args)
+    # print(f"Initial objective value: {val:.4f}")
+    # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
+
+    # recall = vt.build_and_verify_from_params(params,
+    #                                         abstraction_shape,
+    #                                         domain_lb,
+    #                                         domain_ub,
+    #                                         init_domain_lb,
+    #                                         init_domain_ub,
+    #                                         gt_reach_fname=gt_reach_fname,
+    #                                         verbose=True,
+    #                                         log_time=True)
+    # print(recall)
+
+    # Employ gradient descent to optimize the grid
+    params_opt, cost_history, grad_norm_history = s_opt.gradient_descent(
+        params,
+        so.image_area,
+        args=args,
+        steps=3_000,
+        lr=3e-2,
+        grad_clip=1e3,
+        print_every=500,
+        record_every=100)
+
+    recall = vt.build_and_verify_from_params(params_opt,
                                             abstraction_shape,
                                             domain_lb,
                                             domain_ub,

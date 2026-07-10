@@ -9,14 +9,23 @@
 # =====================================================================
 
 import numpy as np
+import jax.numpy as jnp
 
+A_GLOBAL = np.array([[0.8, -0.3],
+                     [0.3,  0.8]])
 
 # =====================================================================
-# Closed-loop dynamical system
+# Closed-loop dynamical system (numpy and JAX)
 # =====================================================================
 
 def dynamics(state, x_star):
-    A = np.array([[0.8, -0.3],
-                  [0.3,  0.8]])
+    A = A_GLOBAL
     state = np.asarray(state, dtype=float)
+    x_star = np.asarray(x_star)
     return (state - x_star) @ A.T + x_star
+
+def dynamics_jax(states, x_star):
+    A = jnp.asarray(A_GLOBAL)
+    states = jnp.asarray(states)
+    x_star = jnp.asarray(x_star)
+    return (states - x_star) @ A.T + x_star

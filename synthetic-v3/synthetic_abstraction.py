@@ -106,7 +106,7 @@ def build_abstraction(
                     kripke_transitions.add(edge)  # transitions oob
 
             kripke_labels[src] = label
-            if verbose and num_states_iterated % 1000 == 0:
+            if verbose and num_states_iterated % 10_000 == 0:
                     print(f"    > {num_states_iterated} / {total_states} states ")
             num_states_iterated += 1
 

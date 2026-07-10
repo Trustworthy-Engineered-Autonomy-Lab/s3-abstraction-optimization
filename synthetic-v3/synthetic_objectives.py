@@ -11,11 +11,69 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import synthetic_system as ss
+from synthetic_system import dynamics_jax
+
+XSTAR = np.array([5.0, 5.0])
 
 
 # =====================================================================
 # Objective functions
 # =====================================================================
+
+
+def image_area(
+    params,
+    *,
+    args
+    ):
+    """
+    Sum of post-image AABB areas for each abstract cell.
+    """
+
+    n1_internal, n2_internal = args['shape']
+    x1_lo, x2_lo = args['domain_lb']
+    x1_hi, x2_hi = args['domain_ub']
+
+    params = jnp.asarray(params)
+    u1 = params[:n1_internal]
+    u2 = params[n1_internal : n1_internal + n2_internal]
+
+    # Convert gap-params -> actual y-line locations
+    x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
+    x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
+
+    # Build all cells' corners: (n1, n2, 4, 2)
+    x1_los = x1_params[:-1]
+    x1_his = x1_params[1:]
+    x2_los = x2_params[:-1]
+    x2_his = x2_params[1:]
+
+    n1 = x1_los.shape[0]
+    n2 = x2_los.shape[0]
+    x1_lo_grid = jnp.broadcast_to(x1_los[:, None], (n1, n2))
+    x1_hi_grid = jnp.broadcast_to(x1_his[:, None], (n1, n2))
+    x2_lo_grid = jnp.broadcast_to(x2_los[None, :], (n1, n2))
+    x2_hi_grid = jnp.broadcast_to(x2_his[None, :], (n1, n2))
+
+    corners = jnp.stack(
+        [
+            jnp.stack([x1_lo_grid, x2_lo_grid], axis=-1),
+            jnp.stack([x1_lo_grid, x2_hi_grid], axis=-1),
+            jnp.stack([x1_hi_grid, x2_hi_grid], axis=-1),
+            jnp.stack([x1_hi_grid, x2_lo_grid], axis=-1),
+        ],
+        axis=-2,
+    )
+    x_next = dynamics_jax(corners, x_star=XSTAR)
+
+    x1 = x_next[..., 0]
+    x2 = x_next[..., 1]
+    x1_lo_post = jnp.min(x1, axis=-1)
+    x1_hi_post = jnp.max(x1, axis=-1)
+    x2_lo_post = jnp.min(x2, axis=-1)
+    x2_hi_post = jnp.max(x2, axis=-1)
+    img_area = (x1_hi_post - x1_lo_post) * (x2_hi_post - x2_lo_post)
+    return jnp.sum(img_area)
 
 # def image_volume(
 #     params,
