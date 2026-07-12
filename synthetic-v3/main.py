@@ -27,7 +27,7 @@ if __name__ == "__main__":
     gt_reach_fname = "synthetic-v3/synthetic_reach_regions.pkl"
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [300, 300]
+    abstraction_shape = [100, 100]
     domain_lb = np.array([-10.0, -10.0])
     domain_ub = np.array([10.0, 10.0])
 

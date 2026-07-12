@@ -78,7 +78,6 @@ def optimize_grid_widths(
 
 if __name__ == "__main__":
 
-    # Cache
     gt_reach_fname = "synthetic-v3/synthetic_reach_regions.pkl"
 
     # Abstraction settings
@@ -93,7 +92,7 @@ if __name__ == "__main__":
     L = np.abs(A_GLOBAL)
 
     # Optimize and determine abstraction shape
-    eta, E_pred, res = optimize_grid_widths(L, 0.004444)
+    eta, E_pred, res = optimize_grid_widths(L, 0.04)
     shape = [int(np.round((ub - lb)/e)) for ub, lb, e in zip(domain_ub, domain_lb, eta)]
     print(f"Predicted avg. succ/state: {E_pred}")
     print(f"Optimal shape: {shape}")
