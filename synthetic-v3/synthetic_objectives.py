@@ -10,7 +10,6 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-import synthetic_system as ss
 from synthetic_system import dynamics_jax
 
 XSTAR = np.array([5.0, 5.0])
@@ -74,6 +73,72 @@ def image_area(
     x2_hi_post = jnp.max(x2, axis=-1)
     img_area = (x1_hi_post - x1_lo_post) * (x2_hi_post - x2_lo_post)
     return jnp.sum(img_area)
+
+
+def epsilon_1_bound(
+    params,
+    *,
+    args,
+    ):
+    """
+    Upper-bound to epsilon-1 on the value-1 function.
+    """
+
+    n1_internal, n2_internal = args['shape']
+    x1_lo, x2_lo = args['domain_lb']
+    x1_hi, x2_hi = args['domain_ub']
+
+    params = jnp.asarray(params)
+    u1 = params[:n1_internal]
+    u2 = params[n1_internal : n1_internal + n2_internal]
+
+    # Convert gap-params -> actual y-line locations
+    x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
+    x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
+
+    # Build every cell in one batch. Keeping all values as JAX arrays makes
+    # this function compatible with grad, value_and_grad, and jit.
+    x1_los = x1_params[:-1]
+    x1_his = x1_params[1:]
+    x2_los = x2_params[:-1]
+    x2_his = x2_params[1:]
+
+    x1_lo_grid, x2_lo_grid = jnp.meshgrid(x1_los, x2_los, indexing="ij")
+    x1_hi_grid, x2_hi_grid = jnp.meshgrid(x1_his, x2_his, indexing="ij")
+
+    lower_bounds = jnp.stack([x1_lo_grid, x2_lo_grid], axis=-1)
+    upper_bounds = jnp.stack([x1_hi_grid, x2_hi_grid], axis=-1)
+    corners = jnp.stack(
+        [
+            lower_bounds,
+            jnp.stack([x1_lo_grid, x2_hi_grid], axis=-1),
+            upper_bounds,
+            jnp.stack([x1_hi_grid, x2_lo_grid], axis=-1),
+        ],
+        axis=-2,
+    )
+
+    centroids = 0.5 * (lower_bounds + upper_bounds)
+    next_corners = dynamics_jax(corners, x_star=XSTAR)
+    next_lower_bounds = jnp.min(next_corners, axis=-2)
+    next_upper_bounds = jnp.max(next_corners, axis=-2)
+    reachable_centroids = 0.5 * (next_lower_bounds + next_upper_bounds)
+
+    radii = 0.5 * jnp.linalg.norm(
+        next_upper_bounds - next_lower_bounds,
+        axis=-1,
+    )
+    center_offsets = (
+        dynamics_jax(centroids, x_star=XSTAR) - reachable_centroids
+    )
+    # sqrt(||d||^2 + eps) is a smooth upper bound on ||d||. In particular,
+    # it avoids the undefined gradient of jnp.linalg.norm at d == 0, which
+    # occurs for every cell when the dynamics are affine.
+    norm_epsilon = jnp.asarray(1e-12, dtype=params.dtype)
+    center_differences = jnp.sqrt(
+        jnp.sum(jnp.square(center_offsets), axis=-1) + norm_epsilon
+    )
+    return jnp.sum(radii + center_differences)
 
 # def image_volume(
 #     params,

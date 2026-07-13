@@ -389,6 +389,108 @@ def noninflated_image_volume(
     return total_volume
 
 
+def epsilon_1_bound(
+    params,
+    *,
+    args,
+    batch_size=4096,
+    ):
+    """
+    Sum the linearized one-step epsilon bound over all abstract cells.
+
+    Each cell is propagated through the first-order model at its centroid.
+    The returned bound is computed before Taylor-remainder inflation because
+    the abstraction's interval-arithmetic remainder implementation is not
+    JAX-differentiable. This function otherwise follows the same linearized
+    AABB construction as ``unicycle_abstraction.build_abstraction``.
+    """
+
+    n1_internal, n2_internal, n3_internal = args['shape']
+    x1_lo, x2_lo, x3_lo = args['domain_lb']
+    x1_hi, x2_hi, x3_hi = args['domain_ub']
+
+    params = jnp.asarray(params)
+    u1 = params[:n1_internal]
+    u2 = params[n1_internal : n1_internal + n2_internal]
+    u3 = params[n1_internal + n2_internal : n1_internal + n2_internal + n3_internal]
+
+    # Convert gap-params -> actual y-line locations
+    x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
+    x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
+    x3_params = make_lines_from_gaps(u3, x3_lo, x3_hi)
+
+    x1_widths = jnp.diff(x1_params)
+    x2_widths = jnp.diff(x2_params)
+    x3_widths = jnp.diff(x3_params)
+
+    x1_centers = 0.5 * (x1_params[:-1] + x1_params[1:])
+    x2_centers = 0.5 * (x2_params[:-1] + x2_params[1:])
+    x3_centers = 0.5 * (x3_params[:-1] + x3_params[1:])
+
+    centroids = jnp.stack(
+        jnp.meshgrid(x1_centers, x2_centers, x3_centers, indexing="ij"),
+        axis=-1,
+    ).reshape((-1, 3))
+    half_spans = 0.5 * jnp.stack(
+        jnp.meshgrid(x1_widths, x2_widths, x3_widths, indexing="ij"),
+        axis=-1,
+    ).reshape((-1, 3))
+
+    batch_size = int(batch_size)
+    num_cells = centroids.shape[0]
+    pad = (-num_cells) % batch_size
+    padded_num_cells = num_cells + pad
+
+    centroids = jnp.pad(centroids, ((0, pad), (0, 0)))
+    half_spans = jnp.pad(half_spans, ((0, pad), (0, 0)))
+    valid_mask = jnp.arange(padded_num_cells) < num_cells
+
+    centroid_batches = centroids.reshape((-1, batch_size, 3))
+    half_span_batches = half_spans.reshape((-1, batch_size, 3))
+    mask_batches = valid_mask.reshape((-1, batch_size))
+    norm_epsilon = jnp.asarray(1e-12, dtype=params.dtype)
+
+    def accumulate_batch(total, batch):
+        centroid_batch, half_span_batch, mask_batch = batch
+        jacobians = _batched_cl_system_jacobian(centroid_batch)
+        centers_next = jax.vmap(cl_system_jax)(centroid_batch)
+
+        corner_offsets = half_span_batch[:, None, :] * _corner_signs[None, :, :]
+        linearized_next_verts = centers_next[:, None, :] + jnp.einsum(
+            "nij,nvj->nvi",
+            jacobians,
+            corner_offsets,
+        )
+        next_lower_bounds = jnp.min(linearized_next_verts, axis=1)
+        next_upper_bounds = jnp.max(linearized_next_verts, axis=1)
+        next_centroids = 0.5 * (next_lower_bounds + next_upper_bounds)
+
+        aabb_radii = 0.5 * jnp.linalg.norm(
+            next_upper_bounds - next_lower_bounds,
+            axis=-1,
+        )
+        center_offsets = centers_next - next_centroids
+        # The linearized image is centered at f(centroid), so this offset is
+        # normally zero. The smooth upper norm avoids NaN derivatives there.
+        center_differences = jnp.sqrt(
+            jnp.sum(jnp.square(center_offsets), axis=-1) + norm_epsilon
+        )
+        contributions = aabb_radii + center_differences
+        contributions = jnp.where(
+            mask_batch,
+            contributions,
+            jnp.zeros_like(contributions),
+        )
+        return total + jnp.sum(contributions), None
+
+    epsilon_sum, _ = jax.lax.scan(
+        accumulate_batch,
+        jnp.asarray(0.0, dtype=params.dtype),
+        (centroid_batches, half_span_batches, mask_batches),
+    )
+    return epsilon_sum
+
+
 # def noninflated_image_volume(
 #     params,
 #     *,

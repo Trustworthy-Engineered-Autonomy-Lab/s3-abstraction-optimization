@@ -53,12 +53,7 @@ if __name__ == "__main__":
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
-    # J = uo.noninflated_image_volume(
-    #     params,
-    #     args=args
-    # )
-    # print(J)
-    # val, grad = jax.value_and_grad(uo.noninflated_image_volume)(
+    # val, grad = jax.value_and_grad(uo.epsilon_1_bound)(
     #     params,
     #     args=args)
     # print(f"Initial objective value: {val:.4f}")
@@ -73,33 +68,33 @@ if __name__ == "__main__":
     #               p=20.0)
     # print(J)
 
-    # Evaluate the initial system
-    recall, kripke_components = vt.build_and_verify_from_params(params,
-                                               abstraction_shape,
-                                               domain_lb,
-                                               domain_ub,
-                                               init_domain_lb,
-                                               init_domain_ub,
-                                               gt_reach_fname=gt_reach_fname,
-                                               verbose=True,
-                                               log_time=True)
-    print(f"    > Recall = {recall}")
-    result = sa.evaluate_simulation_metric(
-        params,
-        kripke_components,
-        abstraction_shape,
-        domain_lb,
-        domain_ub,
-        horizon=1,
-        num_samples=64,
-        batch_size=256,
-        refine=False,
-        verbose=False,
-    )
-    print(f"    > Epsilon = {result.epsilon}")
-    print(f"    > Mean epsilon = {result.epsilon_mean}")
-    print(f"    > Median epsilon = {result.epsilon_median}")
-    print(f"    > Q3 epsilon = {result.epsilon_q3}")
+    # # Evaluate the initial system
+    # recall, kripke_components = vt.build_and_verify_from_params(params,
+    #                                            abstraction_shape,
+    #                                            domain_lb,
+    #                                            domain_ub,
+    #                                            init_domain_lb,
+    #                                            init_domain_ub,
+    #                                            gt_reach_fname=gt_reach_fname,
+    #                                            verbose=True,
+    #                                            log_time=True)
+    # print(f"    > Recall = {recall}")
+    # result = sa.evaluate_simulation_metric(
+    #     params,
+    #     kripke_components,
+    #     abstraction_shape,
+    #     domain_lb,
+    #     domain_ub,
+    #     horizon=1,
+    #     num_samples=64,
+    #     batch_size=256,
+    #     refine=False,
+    #     verbose=False,
+    # )
+    # print(f"    > Epsilon = {result.epsilon}")
+    # print(f"    > Mean epsilon = {result.epsilon_mean}")
+    # print(f"    > Median epsilon = {result.epsilon_median}")
+    # print(f"    > Q3 epsilon = {result.epsilon_q3}")
 
     # Compute initial objective and gradient
     # args = {}
@@ -116,12 +111,12 @@ if __name__ == "__main__":
     # Employ gradient descent to optimize the grid
     params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
         params,
-        uo.noninflated_image_volume,
+        uo.epsilon_1_bound,
         args=args,
-        steps=1_000,
-        lr=1e-3,
+        steps=801,
+        lr=8e-3,
         grad_clip=1e3,
-        print_every=250,
+        print_every=100,
         record_every=100)
     
     # Evaluate the final system

@@ -772,7 +772,7 @@ class UpwardSimulationEstimator:
         seed: int = 0,
         polish: bool = True,
         verbose: bool = False,
-        progress_every: int = 100,
+        progress_every: int = 10_000,
         store_per_state: bool = True,
         store_witnesses: bool = True,
     ) -> UpwardMetricResult:
@@ -904,7 +904,7 @@ if __name__ == "__main__":
     gt_reach_fname = "unicycle-taylor/unicycle_gt_reach_regions_100.pkl"
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [30, 30, 30]
+    abstraction_shape = [20, 20, 20]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
@@ -938,7 +938,7 @@ if __name__ == "__main__":
         abstraction_shape,
         domain_lb,
         domain_ub,
-        horizon=1,
+        horizon=5,
         num_samples=64,
         batch_size=256,
         refine=False,
