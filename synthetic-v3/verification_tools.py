@@ -70,9 +70,9 @@ def build_and_verify_from_params(
 
     # Extract concrete cells edges from quantization parameters
     x_edges, y_edges = so.extract_grid_params(params,
-                                                           shape,
-                                                           domain_lb,
-                                                           domain_ub)
+                                                shape,
+                                                domain_lb,
+                                                domain_ub)
 
     # Build the initial state set from desired bounds
     _, init_states = sa.init_cells_to_ids(init_domain_lb,

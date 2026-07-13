@@ -223,6 +223,11 @@ def id_to_cell(id, nstates_1, nstates_2):
     j = id % nstates_2
     return (i, j)
 
+def id_to_bounds(id, x_edges, y_edges):
+    i, j = id_to_cell(id, len(x_edges)-1, len(y_edges)-1)
+    lb = np.array([x_edges[i], y_edges[j]])
+    ub = np.array([x_edges[i+1], y_edges[j+1]])
+    return lb, ub
 
 # =====================================================================
 # Initial state space initilization
@@ -261,6 +266,31 @@ def init_cells_to_ids(
     return init_cells, init_ids
 
 
+# =====================================================================
+# Functions for re-formatting the abstraction
+# =====================================================================
+
+def kripke_to_dicts(kripke_components, x_edges, y_edges):
+
+    kripke_states = kripke_components['kripke_states']
+    kripke_transitions = kripke_components['kripke_transitions']
+    oob_state_id = (len(x_edges) - 1) * (len(y_edges) - 1)
+
+    successors = {state_id: set() for state_id in kripke_states}
+    cells = {}
+
+    for state_id in kripke_states:
+        if state_id == oob_state_id:
+            cells[state_id] = None
+        else:
+            lb, ub = id_to_bounds(state_id, x_edges, y_edges)
+            cells[state_id] = (lb, ub)
+
+    for src, dst in kripke_transitions:
+        successors[src].add(dst)
+
+    return successors, cells
+
 
 # =====================================================================
 # Section for testing the above methods
@@ -268,7 +298,7 @@ def init_cells_to_ids(
 
 if __name__ == "__main__":
 
-    abstraction_shape = [100, 100]
+    abstraction_shape = [4, 4]
     domain_lb = np.array([-10.0, -10.0])
     domain_ub = np.array([10.0, 10.0])
 
@@ -276,3 +306,7 @@ if __name__ == "__main__":
     y_edges = np.linspace(domain_lb[1], domain_ub[1], abstraction_shape[1]+1)
 
     kripke_components = build_abstraction(x_edges, y_edges, verbose=True)
+
+    successors, cells = kripke_to_dicts(kripke_components, x_edges, y_edges)
+    print(cells)
+    print(successors)
