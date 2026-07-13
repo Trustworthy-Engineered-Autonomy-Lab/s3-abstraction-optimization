@@ -11,6 +11,7 @@
 import numpy as np
 import synthetic_abstraction as sa
 import synthetic_optimizers as s_opt
+import synthetic_simulation_analysis as ssa
 import time
 import jax
 import jax.numpy as jnp
@@ -27,7 +28,7 @@ if __name__ == "__main__":
     gt_reach_fname = "synthetic-v3/synthetic_reach_regions.pkl"
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [100, 100]
+    abstraction_shape = [70, 70]
     domain_lb = np.array([-10.0, -10.0])
     domain_ub = np.array([10.0, 10.0])
 
@@ -58,35 +59,55 @@ if __name__ == "__main__":
     # print(f"Initial objective value: {val:.4f}")
     # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
-    # recall = vt.build_and_verify_from_params(params,
-    #                                         abstraction_shape,
-    #                                         domain_lb,
-    #                                         domain_ub,
-    #                                         init_domain_lb,
-    #                                         init_domain_ub,
-    #                                         gt_reach_fname=gt_reach_fname,
-    #                                         verbose=True,
-    #                                         log_time=True)
-    # print(recall)
+    # Evaluate initial abstraction
+    recall, kripke_components = vt.build_and_verify_from_params(params,
+                                                                abstraction_shape,
+                                                                domain_lb,
+                                                                domain_ub,
+                                                                init_domain_lb,
+                                                                init_domain_ub,
+                                                                gt_reach_fname=gt_reach_fname,
+                                                                verbose=True,
+                                                                log_time=True)
+    print(f"    > Recall = {recall}")
+    result = ssa.evaluate_simulation_metric(params,
+                                            kripke_components,
+                                            abstraction_shape,
+                                            domain_lb,
+                                            domain_ub)
+    print(f"    > Epsilon = {result.epsilon}")
+    print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Median epsilon = {result.epsilon_median}")
+    print(f"    > Q3 epsilon = {result.epsilon_q3}")
 
     # Employ gradient descent to optimize the grid
     params_opt, cost_history, grad_norm_history = s_opt.gradient_descent(
         params,
         so.image_area,
         args=args,
-        steps=3_000,
+        steps=1_000,
         lr=3e-2,
         grad_clip=1e3,
         print_every=500,
         record_every=100)
 
-    recall = vt.build_and_verify_from_params(params_opt,
+    # Evaluate final abstraction
+    recall, kripke_components = vt.build_and_verify_from_params(params_opt,
+                                                                abstraction_shape,
+                                                                domain_lb,
+                                                                domain_ub,
+                                                                init_domain_lb,
+                                                                init_domain_ub,
+                                                                gt_reach_fname=gt_reach_fname,
+                                                                verbose=True,
+                                                                log_time=True)
+    print(f"Recall = {recall}")
+    result = ssa.evaluate_simulation_metric(params_opt,
+                                            kripke_components,
                                             abstraction_shape,
                                             domain_lb,
-                                            domain_ub,
-                                            init_domain_lb,
-                                            init_domain_ub,
-                                            gt_reach_fname=gt_reach_fname,
-                                            verbose=True,
-                                            log_time=True)
-    print(recall)
+                                            domain_ub)
+    print(f"    > Epsilon = {result.epsilon}")
+    print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Median epsilon = {result.epsilon_median}")
+    print(f"    > Q3 epsilon = {result.epsilon_q3}")

@@ -376,6 +376,14 @@ def id_to_cell(id, nstates_1, nstates_2, nstates_3):
     k = remainder % nstates_3
     return (i, j, k)
 
+def id_to_bounds(id, x_edges, y_edges, theta_edges):
+    i, j, k = id_to_cell(id,
+                         len(x_edges)-1,
+                         len(y_edges)-1,
+                         len(theta_edges)-1)
+    lb = np.array([x_edges[i], y_edges[j], theta_edges[k]])
+    ub = np.array([x_edges[i+1], y_edges[j+1], theta_edges[k+1]])
+    return lb, ub
 
 # =====================================================================
 # Initial state space initilization
@@ -418,6 +426,31 @@ def init_cells_to_ids(
 
     return init_cells, init_ids
 
+
+# =====================================================================
+# Functions for re-formatting the abstraction
+# =====================================================================
+
+def kripke_to_dicts(kripke_components, x_edges, y_edges, theta_edges):
+
+    kripke_states = kripke_components['kripke_states']
+    kripke_transitions = kripke_components['kripke_transitions']
+    oob_state_id = (len(x_edges) - 1) * (len(y_edges) - 1) * (len(theta_edges) - 1)
+
+    successors = {state_id: set() for state_id in kripke_states}
+    cells = {}
+
+    for state_id in kripke_states:
+        if state_id == oob_state_id:
+            cells[state_id] = None
+        else:
+            lb, ub = id_to_bounds(state_id, x_edges, y_edges, theta_edges)
+            cells[state_id] = (lb, ub)
+
+    for src, dst in kripke_transitions:
+        successors[src].add(dst)
+
+    return successors, cells
 
 
 # =====================================================================

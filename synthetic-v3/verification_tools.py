@@ -119,7 +119,7 @@ def build_and_verify_from_params(
     mc_sat_vol = np.sum(mc_init_sat_volumes)
     recall = mc_sat_vol/gt_sat_vol
     
-    return recall
+    return recall, kripke_components
 
 # =====================================================================
 # Concrete satisfaction analysis
