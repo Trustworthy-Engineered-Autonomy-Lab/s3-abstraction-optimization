@@ -7,7 +7,7 @@
 # =====================================================================
 
 import unicycle_abstraction as ua
-import unicycle_simulation_analysis as sa
+import unicycle_simulation_analysis as usa
 import unicycle_objectives as uo
 import verification_tools as vt
 import unicycle_optimizers as u_opt
@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [80, 80, 80]
+    abstraction_shape = [50, 50, 50]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
@@ -53,11 +53,35 @@ if __name__ == "__main__":
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
-    # val, grad = jax.value_and_grad(uo.epsilon_1_bound)(
+    args['horizon'] = 3
+    # args['temp'] = 1.0
+    args['temp_in'] = 1.0
+    args['temp_out'] = 1.0
+    args['inflation_coefs'] = np.array([0.5, 0.5, 0.1])
+    args['beta'] = 0.4
+
+    # val, grad = jax.value_and_grad(uo.conservatism_cost_fast)(
     #     params,
     #     args=args)
     # print(f"Initial objective value: {val:.4f}")
     # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
+
+    # val, grad = jax.value_and_grad(uo.epsilon_H_bounds)(
+    #     params,
+    #     args=args)
+    # print(f"Initial objective value: {val:.4f}")
+    # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
+
+    J_eps = uo.epsilon_H_bound(
+        params,
+        args=args
+    )
+    print(f"Raw epsilon cost: {J_eps}")
+    J_vol = uo.image_volume(
+        params,
+        args=args
+    )
+    print(f"Raw volume cost: {J_vol}")
 
     # L = usj.quantile_lipschitz_array(domain_lb, domain_ub)
     # J = uo.succ_bound(params,
@@ -79,13 +103,13 @@ if __name__ == "__main__":
     #                                            verbose=True,
     #                                            log_time=True)
     # print(f"    > Recall = {recall}")
-    # result = sa.evaluate_simulation_metric(
+    # result = usa.evaluate_simulation_metric(
     #     params,
     #     kripke_components,
     #     abstraction_shape,
     #     domain_lb,
     #     domain_ub,
-    #     horizon=1,
+    #     horizon=3,
     #     num_samples=64,
     #     batch_size=256,
     #     refine=False,
@@ -96,7 +120,7 @@ if __name__ == "__main__":
     # print(f"    > Median epsilon = {result.epsilon_median}")
     # print(f"    > Q3 epsilon = {result.epsilon_q3}")
 
-    # Compute initial objective and gradient
+    # # Compute initial objective and gradient
     # args = {}
     # args['shape'] = abstraction_shape
     # args['domain_lb'] = domain_lb
@@ -108,16 +132,50 @@ if __name__ == "__main__":
     # print(f"Initial objective value: {val:.4f}")
     # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
-    # Employ gradient descent to optimize the grid
+    # # Employ gradient descent to optimize the grid (best fast metric)
+    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    #     params,
+    #     uo.conservatism_cost_max,
+    #     args=args,
+    #     steps=200,
+    #     lr=1e-5,
+    #     grad_clip=1e3,
+    #     print_every=5,
+    #     record_every=100)
+
+
+    # Employ gradient descent to optimize the grid (best fast metric)
     params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
         params,
-        uo.epsilon_1_bound,
+        uo.conservatism_cost_fast,
         args=args,
-        steps=801,
-        lr=8e-3,
+        steps=50,
+        lr=2e-3,
         grad_clip=1e3,
-        print_every=100,
+        print_every=10,
         record_every=100)
+
+    # # Employ gradient descent to optimize the grid (image area params)
+    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    #     params,
+    #     uo.conservatism_cost,
+    #     args=args,
+    #     steps=200,
+    #     lr=2e-3,
+    #     grad_clip=1e3,
+    #     print_every=5,
+    #     record_every=100)
+
+    # # Employ gradient descent to optimize the grid
+    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    #     params,
+    #     uo.epsilon_H_bounds,
+    #     args=args,
+    #     steps=501,
+    #     lr=5e-2,
+    #     grad_clip=1e3,
+    #     print_every=50,
+    #     record_every=100)
     
     # Evaluate the final system
     recall, kripke_components = vt.build_and_verify_from_params(params_opt,
@@ -130,13 +188,13 @@ if __name__ == "__main__":
                                                verbose=True,
                                                log_time=True)
     print(f"    > Recall = {recall}")
-    result = sa.evaluate_simulation_metric(
+    result = usa.evaluate_simulation_metric(
         params_opt,
         kripke_components,
         abstraction_shape,
         domain_lb,
         domain_ub,
-        horizon=1,
+        horizon=3,
         num_samples=64,
         batch_size=256,
         refine=False,
