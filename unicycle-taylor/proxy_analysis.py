@@ -44,7 +44,7 @@ if __name__ == "__main__":
     args['horizon'] = 3
     args['temp_in'] = 0.5
     args['temp_out'] = 0.5
-    args['inflation_coefs'] = np.array([0.5, 0.5, 0.1])
+    args['inflation_coefs'] = np.array([1.0, 1.0, 0.3])
 
     keys = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     proxies = []

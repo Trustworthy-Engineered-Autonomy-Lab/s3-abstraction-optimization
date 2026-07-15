@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [20, 20, 20]
+    abstraction_shape = [80, 80, 20]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
@@ -40,13 +40,13 @@ if __name__ == "__main__":
     # Initialize abstraction parameters
     key = jax.random.PRNGKey(0)
     sigma_u = 1.0
-    # u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
-    # u2 = jnp.zeros((abstraction_shape[1],))
-    # u3 = jnp.zeros((abstraction_shape[2],))
-    key, k_u1, k_u2 = jax.random.split(key, 3)
-    u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
-    u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
-    u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
+    u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
+    u2 = jnp.zeros((abstraction_shape[1],))
+    u3 = jnp.zeros((abstraction_shape[2],))
+    # key, k_u1, k_u2 = jax.random.split(key, 3)
+    # u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
+    # u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
+    # u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
     params = jnp.concatenate([u1, u2, u3])
 
     args = {}
@@ -55,9 +55,9 @@ if __name__ == "__main__":
     args['domain_ub'] = domain_ub
     args['horizon'] = 3
     # args['temp'] = 1.0
-    args['temp_in'] = 0.5
-    args['temp_out'] = 0.5
-    args['inflation_coefs'] = np.array([0.5, 0.5, 0.1])
+    args['temp_in'] = 0.1
+    args['temp_out'] = 0.1
+    args['inflation_coefs'] = np.array([0.3, 0.3, 0.1])
     args['beta'] = 0.4
 
     # val, grad = jax.value_and_grad(uo.conservatism_cost_fast)(
@@ -92,33 +92,33 @@ if __name__ == "__main__":
     print(f"Initial objective value: {val:.4f}")
     print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
-    # Evaluate the initial system
-    recall, kripke_components = vt.build_and_verify_from_params(params,
-                                               abstraction_shape,
-                                               domain_lb,
-                                               domain_ub,
-                                               init_domain_lb,
-                                               init_domain_ub,
-                                               gt_reach_fname=gt_reach_fname,
-                                               verbose=True,
-                                               log_time=True)
-    print(f"    > Recall = {recall}")
-    result = usa.evaluate_simulation_metric(
-        params,
-        kripke_components,
-        abstraction_shape,
-        domain_lb,
-        domain_ub,
-        horizon=3,
-        num_samples=64,
-        batch_size=256,
-        refine=False,
-        verbose=False,
-    )
-    print(f"    > Epsilon = {result.epsilon}")
-    print(f"    > Mean epsilon = {result.epsilon_mean}")
-    print(f"    > Median epsilon = {result.epsilon_median}")
-    print(f"    > Q3 epsilon = {result.epsilon_q3}")
+    # # Evaluate the initial system
+    # recall, kripke_components = vt.build_and_verify_from_params(params,
+    #                                            abstraction_shape,
+    #                                            domain_lb,
+    #                                            domain_ub,
+    #                                            init_domain_lb,
+    #                                            init_domain_ub,
+    #                                            gt_reach_fname=gt_reach_fname,
+    #                                            verbose=True,
+    #                                            log_time=True)
+    # print(f"    > Recall = {recall}")
+    # result = usa.evaluate_simulation_metric(
+    #     params,
+    #     kripke_components,
+    #     abstraction_shape,
+    #     domain_lb,
+    #     domain_ub,
+    #     horizon=3,
+    #     num_samples=64,
+    #     batch_size=256,
+    #     refine=False,
+    #     verbose=False,
+    # )
+    # print(f"    > Epsilon = {result.epsilon}")
+    # print(f"    > Mean epsilon = {result.epsilon_mean}")
+    # print(f"    > Median epsilon = {result.epsilon_median}")
+    # print(f"    > Q3 epsilon = {result.epsilon_q3}")
 
     # # Compute initial objective and gradient
     # args = {}
@@ -171,10 +171,10 @@ if __name__ == "__main__":
         params,
         uo.upward_proxy,
         args=args,
-        steps=1001,
-        lr=5e-2,
-        grad_clip=1e3,
-        print_every=10,
+        steps=10,
+        lr=0.5,
+        grad_clip=100,
+        print_every=1,
         record_every=100)
     
     # Evaluate the final system
