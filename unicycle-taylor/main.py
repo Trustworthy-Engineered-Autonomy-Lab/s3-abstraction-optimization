@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [50, 50, 50]
+    abstraction_shape = [20, 20, 20]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
@@ -55,8 +55,8 @@ if __name__ == "__main__":
     args['domain_ub'] = domain_ub
     args['horizon'] = 3
     # args['temp'] = 1.0
-    args['temp_in'] = 1.0
-    args['temp_out'] = 1.0
+    args['temp_in'] = 0.5
+    args['temp_out'] = 0.5
     args['inflation_coefs'] = np.array([0.5, 0.5, 0.1])
     args['beta'] = 0.4
 
@@ -72,53 +72,53 @@ if __name__ == "__main__":
     # print(f"Initial objective value: {val:.4f}")
     # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
-    J_eps = uo.epsilon_H_bound(
-        params,
-        args=args
-    )
-    print(f"Raw epsilon cost: {J_eps}")
-    J_vol = uo.image_volume(
-        params,
-        args=args
-    )
-    print(f"Raw volume cost: {J_vol}")
+    # J_eps = uo.epsilon_H_bound(
+    #     params,
+    #     args=args
+    # )
+    # print(f"Raw epsilon cost: {J_eps}")
+    # J_vol = uo.image_volume(
+    #     params,
+    #     args=args
+    # )
+    # print(f"Raw volume cost: {J_vol}")
 
     # L = usj.quantile_lipschitz_array(domain_lb, domain_ub)
-    # J = uo.succ_bound(params,
-    #               shape=abstraction_shape,
-    #               domain_lb=domain_lb,
-    #               domain_ub=domain_ub,
-    #               L=L,
-    #               p=20.0)
+    # J = uo.upward_proxy(params, args=args)
     # print(J)
+    val, grad = jax.value_and_grad(uo.upward_proxy)(
+        params,
+        args=args)
+    print(f"Initial objective value: {val:.4f}")
+    print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
-    # # Evaluate the initial system
-    # recall, kripke_components = vt.build_and_verify_from_params(params,
-    #                                            abstraction_shape,
-    #                                            domain_lb,
-    #                                            domain_ub,
-    #                                            init_domain_lb,
-    #                                            init_domain_ub,
-    #                                            gt_reach_fname=gt_reach_fname,
-    #                                            verbose=True,
-    #                                            log_time=True)
-    # print(f"    > Recall = {recall}")
-    # result = usa.evaluate_simulation_metric(
-    #     params,
-    #     kripke_components,
-    #     abstraction_shape,
-    #     domain_lb,
-    #     domain_ub,
-    #     horizon=3,
-    #     num_samples=64,
-    #     batch_size=256,
-    #     refine=False,
-    #     verbose=False,
-    # )
-    # print(f"    > Epsilon = {result.epsilon}")
-    # print(f"    > Mean epsilon = {result.epsilon_mean}")
-    # print(f"    > Median epsilon = {result.epsilon_median}")
-    # print(f"    > Q3 epsilon = {result.epsilon_q3}")
+    # Evaluate the initial system
+    recall, kripke_components = vt.build_and_verify_from_params(params,
+                                               abstraction_shape,
+                                               domain_lb,
+                                               domain_ub,
+                                               init_domain_lb,
+                                               init_domain_ub,
+                                               gt_reach_fname=gt_reach_fname,
+                                               verbose=True,
+                                               log_time=True)
+    print(f"    > Recall = {recall}")
+    result = usa.evaluate_simulation_metric(
+        params,
+        kripke_components,
+        abstraction_shape,
+        domain_lb,
+        domain_ub,
+        horizon=3,
+        num_samples=64,
+        batch_size=256,
+        refine=False,
+        verbose=False,
+    )
+    print(f"    > Epsilon = {result.epsilon}")
+    print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Median epsilon = {result.epsilon_median}")
+    print(f"    > Q3 epsilon = {result.epsilon_q3}")
 
     # # Compute initial objective and gradient
     # args = {}
@@ -144,16 +144,16 @@ if __name__ == "__main__":
     #     record_every=100)
 
 
-    # Employ gradient descent to optimize the grid (best fast metric)
-    params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
-        params,
-        uo.conservatism_cost_fast,
-        args=args,
-        steps=50,
-        lr=2e-3,
-        grad_clip=1e3,
-        print_every=10,
-        record_every=100)
+    # # Employ gradient descent to optimize the grid (best fast metric)
+    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    #     params,
+    #     uo.conservatism_cost_fast,
+    #     args=args,
+    #     steps=50,
+    #     lr=2e-3,
+    #     grad_clip=1e3,
+    #     print_every=10,
+    #     record_every=100)
 
     # # Employ gradient descent to optimize the grid (image area params)
     # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
@@ -166,16 +166,16 @@ if __name__ == "__main__":
     #     print_every=5,
     #     record_every=100)
 
-    # # Employ gradient descent to optimize the grid
-    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
-    #     params,
-    #     uo.epsilon_H_bounds,
-    #     args=args,
-    #     steps=501,
-    #     lr=5e-2,
-    #     grad_clip=1e3,
-    #     print_every=50,
-    #     record_every=100)
+    # Employ gradient descent to optimize the grid
+    params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+        params,
+        uo.upward_proxy,
+        args=args,
+        steps=1001,
+        lr=5e-2,
+        grad_clip=1e3,
+        print_every=10,
+        record_every=100)
     
     # Evaluate the final system
     recall, kripke_components = vt.build_and_verify_from_params(params_opt,
