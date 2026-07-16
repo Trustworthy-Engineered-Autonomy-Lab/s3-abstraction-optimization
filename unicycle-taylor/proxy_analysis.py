@@ -18,6 +18,7 @@ import numpy as np
 import pyModelChecking as pmc
 import pickle as pkl
 import matplotlib.pyplot as plt
+from scipy import stats
 
 
 # =====================================================================
@@ -41,12 +42,12 @@ if __name__ == "__main__":
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
-    args['horizon'] = 3
-    args['temp_in'] = 0.5
-    args['temp_out'] = 0.5
+    args['horizon'] = 1
+    args['temp_in'] = 0.1
+    args['temp_out'] = 0.1
     args['inflation_coefs'] = np.array([1.0, 1.0, 0.3])
 
-    keys = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    keys = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]
     proxies = []
     epsilons = []
     mean_epsilons = []
@@ -106,6 +107,19 @@ if __name__ == "__main__":
             },
             f,
         )
+
+    # with open("unicycle-taylor/proxy_analysis_data.pkl", "rb") as f:
+    #     data = pkl.load(f)
+    
+    # proxies = np.array(data['proxies'])
+    # epsilons = np.array(data['epsilons'])
+    # mean_epsilons = np.array(data['mean_epsilons'])
+
+    pearson_corr, p_value_p = stats.pearsonr(epsilons, proxies)
+    print(f"Pearson r: {pearson_corr:.3f}, p-value: {p_value_p:.3f}")
+
+    spearman_corr, p_value_s = stats.spearmanr(epsilons, proxies)
+    print(f"Spearman r: {spearman_corr:.3f}, p-value: {p_value_s:.3f}")
 
     plt.plot(keys, proxies, label="proxy")
     plt.plot(keys, epsilons, label="epsilon")
