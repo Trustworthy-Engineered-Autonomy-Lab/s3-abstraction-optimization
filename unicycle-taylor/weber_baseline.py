@@ -171,14 +171,14 @@ if __name__ == "__main__":
     u3 = jnp.zeros((shape[2],))
     params = jnp.concatenate([u1, u2, u3])
 
-    # # Build and verify
-    # recall,_ = vt.build_and_verify_from_params(params,
-    #                                          shape,
-    #                                          domain_lb,
-    #                                          domain_ub,
-    #                                          init_domain_lb,
-    #                                          init_domain_ub,
-    #                                          gt_reach_fname=gt_reach_fname,
-    #                                          verbose=True,
-    #                                          log_time=True)
-    # print(recall)
+    # Build and verify
+    recall,_ = vt.build_and_verify_from_params(params,
+                                             shape,
+                                             domain_lb,
+                                             domain_ub,
+                                             init_domain_lb,
+                                             init_domain_ub,
+                                             gt_reach_fname=gt_reach_fname,
+                                             verbose=True,
+                                             log_time=True)
+    print(recall)
