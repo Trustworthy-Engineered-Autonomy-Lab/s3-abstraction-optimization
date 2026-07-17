@@ -1,16 +1,10 @@
-"""Closed-loop MountainCar dynamics and cached analytic derivatives.
+# =====================================================================
+# Description: main script for training abstraction parameters
+# =====================================================================
 
-The DDPG actor is a ReLU/ReLU/Tanh network.  Expanding that network into one
-large SymPy Piecewise expression is both expensive and unnecessary.  Once the
-ReLU activation pattern is fixed, the actor's pre-Tanh output is affine in the
-state.  This module exploits that fact to evaluate the exact point Jacobian and
-Hessian with NumPy, without invoking automatic differentiation.
-
-An interval Hessian is returned only when every ReLU and every MountainCar
-clipping/reset condition has one fixed branch over the supplied box.  That
-restriction is important: a Hessian-only Taylor bound is not valid across a
-ReLU or clipping boundary because the Jacobian can jump there.
-"""
+# =====================================================================
+# Libraries
+# =====================================================================
 
 from __future__ import annotations
 
@@ -31,6 +25,10 @@ with contextlib.redirect_stderr(io.StringIO()):
     from stable_baselines3 import DDPG
 
 
+# =====================================================================
+# Globals
+# =====================================================================
+
 CHECKPOINT_FILENAME = "ddpg-MountainCarContinuous-v0-gymnasium.zip"
 ACTOR_CACHE_FILENAME = "mountain_car_actor_derivatives.npz"
 LOCAL_CHECKPOINT_PATH = Path(__file__).with_name(CHECKPOINT_FILENAME)
@@ -47,9 +45,12 @@ _CACHE_VERSION = 1
 _POINT_BOUNDARY_TOL = 1e-12
 
 
+# =====================================================================
+# Specialized errors
+# =====================================================================
+
 class DerivativeDomainError(ValueError):
     """Raised when a box crosses a nonsmooth closed-loop boundary."""
-
 
 class NonDifferentiableStateError(DerivativeDomainError):
     """Raised when a requested point lies on a nonsmooth boundary."""
@@ -195,6 +196,10 @@ def _load_or_cache_actor_arrays(controller: DDPG) -> dict[str, np.ndarray]:
 
     return arrays
 
+
+# =====================================================================
+# More global vars...
+# =====================================================================
 
 CONTROLLER = load_controller()
 _ACTOR_ARRAYS = _load_or_cache_actor_arrays(CONTROLLER)
@@ -369,7 +374,6 @@ def _actor_point_derivatives(
 
     return float(action), action_gradient, action_hessian
 
-
 def _closed_loop_point_derivatives(
     state: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -444,7 +448,7 @@ def hessian(state: np.ndarray) -> np.ndarray:
 
 
 # =====================================================================
-# Certified interval Hessian
+# Interval Hessian
 # =====================================================================
 
 def _affine_interval(
@@ -596,15 +600,8 @@ def _strict_interval_hessian(
     lower_bounds: np.ndarray,
     upper_bounds: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return a certified interval enclosure on one smooth branch.
-
-    The returned arrays have shape ``(2, 2, 2)`` and use the convention
-    ``H[output, state_variable_1, state_variable_2]``.
-
-    Raises:
-        DerivativeDomainError: if the box crosses/touches a ReLU, clip, or
-            reset boundary.  No classical Hessian-only Taylor certificate is
-            valid across such a boundary.
+    """
+    Return a certified interval enclosure on one smooth branch.
     """
 
     lower, upper = _validate_box(lower_bounds, upper_bounds)
@@ -686,8 +683,6 @@ def _strict_interval_hessian(
                 "Subdivide the box before using a Hessian Taylor bound."
             )
 
-    # Keep these interval values explicit: they make the branch analysis above
-    # auditable even though only the Hessian is returned.
     _ = (position_lower, position_upper)
     hessian_lower = np.stack([position_h_lower, velocity_h_lower])
     hessian_upper = np.stack([position_h_upper, velocity_h_upper])
