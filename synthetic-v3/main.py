@@ -28,7 +28,7 @@ if __name__ == "__main__":
     gt_reach_fname = "synthetic-v3/synthetic_reach_regions.pkl"
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [70, 70]
+    abstraction_shape = [100, 100]
     domain_lb = np.array([-10.0, -10.0])
     domain_ub = np.array([10.0, 10.0])
 
@@ -50,10 +50,17 @@ if __name__ == "__main__":
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
+    args['horizon'] = 3
+    args['temp'] = 2.0
+    args['inflation_coef'] = 0.1
 
-    # J = so.image_area(params, args=args)
+    # J = so.epsilon_H_bound(
+    #     params,
+    #     args=args
+    # )
     # print(J)
-    # val, grad = jax.value_and_grad(so.image_area)(
+
+    # val, grad = jax.value_and_grad(so.epsilon_H_bound)(
     #     params,
     #     args=args)
     # print(f"Initial objective value: {val:.4f}")
@@ -74,7 +81,8 @@ if __name__ == "__main__":
                                             kripke_components,
                                             abstraction_shape,
                                             domain_lb,
-                                            domain_ub)
+                                            domain_ub,
+                                            horizon=3)
     print(f"    > Epsilon = {result.epsilon}")
     print(f"    > Mean epsilon = {result.epsilon_mean}")
     print(f"    > Median epsilon = {result.epsilon_median}")
@@ -83,12 +91,12 @@ if __name__ == "__main__":
     # Employ gradient descent to optimize the grid
     params_opt, cost_history, grad_norm_history = s_opt.gradient_descent(
         params,
-        so.image_area,
+        so.epsilon_H_bound,
         args=args,
-        steps=1_000,
-        lr=3e-2,
+        steps=251,
+        lr=5e-1,
         grad_clip=1e3,
-        print_every=500,
+        print_every=50,
         record_every=100)
 
     # Evaluate final abstraction
@@ -106,7 +114,8 @@ if __name__ == "__main__":
                                             kripke_components,
                                             abstraction_shape,
                                             domain_lb,
-                                            domain_ub)
+                                            domain_ub,
+                                            horizon=3)
     print(f"    > Epsilon = {result.epsilon}")
     print(f"    > Mean epsilon = {result.epsilon_mean}")
     print(f"    > Median epsilon = {result.epsilon_median}")

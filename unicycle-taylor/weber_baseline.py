@@ -9,6 +9,7 @@
 
 import os
 import unicycle_system_jax as usj
+import unicycle_simulation_analysis as usa
 import numpy as np
 from scipy.optimize import minimize
 import jax
@@ -171,14 +172,31 @@ if __name__ == "__main__":
     u3 = jnp.zeros((shape[2],))
     params = jnp.concatenate([u1, u2, u3])
 
-    # Build and verify
-    recall,_ = vt.build_and_verify_from_params(params,
-                                             shape,
-                                             domain_lb,
-                                             domain_ub,
-                                             init_domain_lb,
-                                             init_domain_ub,
-                                             gt_reach_fname=gt_reach_fname,
-                                             verbose=True,
-                                             log_time=True)
-    print(recall)
+    # Evaluate the optimized system
+    recall, kripke_components = vt.build_and_verify_from_params(
+                                            params,
+                                            shape,
+                                            domain_lb,
+                                            domain_ub,
+                                            init_domain_lb,
+                                            init_domain_ub,
+                                            gt_reach_fname=gt_reach_fname,
+                                            verbose=True,
+                                            log_time=True)
+    print(f"    > Recall = {recall}")
+    result = usa.evaluate_simulation_metric(
+        params,
+        kripke_components,
+        shape,
+        domain_lb,
+        domain_ub,
+        horizon=3,
+        num_samples=64,
+        batch_size=256,
+        refine=False,
+        verbose=False,
+    )
+    print(f"    > Epsilon = {result.epsilon}")
+    print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Median epsilon = {result.epsilon_median}")
+    print(f"    > Q3 epsilon = {result.epsilon_q3}")

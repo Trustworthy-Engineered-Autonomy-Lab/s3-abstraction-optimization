@@ -7,7 +7,7 @@
 # =====================================================================
 
 import unicycle_abstraction as ua
-import unicycle_simulation_analysis as sa
+import unicycle_simulation_analysis as usa
 import unicycle_objectives as uo
 import verification_tools as vt
 import unicycle_optimizers as u_opt
@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [80, 80, 80]
+    abstraction_shape = [80, 80, 20]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
@@ -40,68 +40,87 @@ if __name__ == "__main__":
     # Initialize abstraction parameters
     key = jax.random.PRNGKey(0)
     sigma_u = 1.0
-    # u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
-    # u2 = jnp.zeros((abstraction_shape[1],))
-    # u3 = jnp.zeros((abstraction_shape[2],))
-    key, k_u1, k_u2 = jax.random.split(key, 3)
-    u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
-    u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
-    u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
+    u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
+    u2 = jnp.zeros((abstraction_shape[1],))
+    u3 = jnp.zeros((abstraction_shape[2],))
+    # key, k_u1, k_u2 = jax.random.split(key, 3)
+    # u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
+    # u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
+    # u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
     params = jnp.concatenate([u1, u2, u3])
 
     args = {}
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
-    # J = uo.noninflated_image_volume(
-    #     params,
-    #     args=args
-    # )
-    # print(J)
-    # val, grad = jax.value_and_grad(uo.noninflated_image_volume)(
+    args['horizon'] = 3
+    # args['temp'] = 1.0
+    args['temp_in'] = 0.1
+    args['temp_out'] = 0.1
+    args['inflation_coefs'] = np.array([0.3, 0.3, 0.1])
+    args['beta'] = 0.4
+
+    # val, grad = jax.value_and_grad(uo.conservatism_cost_fast)(
     #     params,
     #     args=args)
     # print(f"Initial objective value: {val:.4f}")
     # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
+    # val, grad = jax.value_and_grad(uo.epsilon_H_bounds)(
+    #     params,
+    #     args=args)
+    # print(f"Initial objective value: {val:.4f}")
+    # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
+
+    # J_eps = uo.epsilon_H_bound(
+    #     params,
+    #     args=args
+    # )
+    # print(f"Raw epsilon cost: {J_eps}")
+    # J_vol = uo.image_volume(
+    #     params,
+    #     args=args
+    # )
+    # print(f"Raw volume cost: {J_vol}")
+
     # L = usj.quantile_lipschitz_array(domain_lb, domain_ub)
-    # J = uo.succ_bound(params,
-    #               shape=abstraction_shape,
-    #               domain_lb=domain_lb,
-    #               domain_ub=domain_ub,
-    #               L=L,
-    #               p=20.0)
+    # J = uo.upward_proxy(params, args=args)
     # print(J)
-
-    # Evaluate the initial system
-    recall, kripke_components = vt.build_and_verify_from_params(params,
-                                               abstraction_shape,
-                                               domain_lb,
-                                               domain_ub,
-                                               init_domain_lb,
-                                               init_domain_ub,
-                                               gt_reach_fname=gt_reach_fname,
-                                               verbose=True,
-                                               log_time=True)
-    print(f"    > Recall = {recall}")
-    result = sa.evaluate_simulation_metric(
+    val, grad = jax.value_and_grad(uo.upward_proxy)(
         params,
-        kripke_components,
-        abstraction_shape,
-        domain_lb,
-        domain_ub,
-        horizon=1,
-        num_samples=64,
-        batch_size=256,
-        refine=False,
-        verbose=False,
-    )
-    print(f"    > Epsilon = {result.epsilon}")
-    print(f"    > Mean epsilon = {result.epsilon_mean}")
-    print(f"    > Median epsilon = {result.epsilon_median}")
-    print(f"    > Q3 epsilon = {result.epsilon_q3}")
+        args=args)
+    print(f"Initial objective value: {val:.4f}")
+    print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
-    # Compute initial objective and gradient
+    # # Evaluate the initial system
+    # recall, kripke_components = vt.build_and_verify_from_params(params,
+    #                                            abstraction_shape,
+    #                                            domain_lb,
+    #                                            domain_ub,
+    #                                            init_domain_lb,
+    #                                            init_domain_ub,
+    #                                            gt_reach_fname=gt_reach_fname,
+    #                                            verbose=True,
+    #                                            log_time=True)
+    # print(f"    > Recall = {recall}")
+    # result = usa.evaluate_simulation_metric(
+    #     params,
+    #     kripke_components,
+    #     abstraction_shape,
+    #     domain_lb,
+    #     domain_ub,
+    #     horizon=3,
+    #     num_samples=64,
+    #     batch_size=256,
+    #     refine=False,
+    #     verbose=False,
+    # )
+    # print(f"    > Epsilon = {result.epsilon}")
+    # print(f"    > Mean epsilon = {result.epsilon_mean}")
+    # print(f"    > Median epsilon = {result.epsilon_median}")
+    # print(f"    > Q3 epsilon = {result.epsilon_q3}")
+
+    # # Compute initial objective and gradient
     # args = {}
     # args['shape'] = abstraction_shape
     # args['domain_lb'] = domain_lb
@@ -113,15 +132,49 @@ if __name__ == "__main__":
     # print(f"Initial objective value: {val:.4f}")
     # print(f"Initial objective grad norm: {jnp.linalg.norm(grad):.4f}")
 
+    # # Employ gradient descent to optimize the grid (best fast metric)
+    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    #     params,
+    #     uo.conservatism_cost_max,
+    #     args=args,
+    #     steps=200,
+    #     lr=1e-5,
+    #     grad_clip=1e3,
+    #     print_every=5,
+    #     record_every=100)
+
+
+    # # Employ gradient descent to optimize the grid (best fast metric)
+    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    #     params,
+    #     uo.conservatism_cost_fast,
+    #     args=args,
+    #     steps=50,
+    #     lr=2e-3,
+    #     grad_clip=1e3,
+    #     print_every=10,
+    #     record_every=100)
+
+    # # Employ gradient descent to optimize the grid (image area params)
+    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    #     params,
+    #     uo.conservatism_cost,
+    #     args=args,
+    #     steps=200,
+    #     lr=2e-3,
+    #     grad_clip=1e3,
+    #     print_every=5,
+    #     record_every=100)
+
     # Employ gradient descent to optimize the grid
     params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
         params,
-        uo.noninflated_image_volume,
+        uo.upward_proxy,
         args=args,
-        steps=1_000,
-        lr=1e-3,
-        grad_clip=1e3,
-        print_every=250,
+        steps=10,
+        lr=0.5,
+        grad_clip=100,
+        print_every=1,
         record_every=100)
     
     # Evaluate the final system
@@ -135,13 +188,13 @@ if __name__ == "__main__":
                                                verbose=True,
                                                log_time=True)
     print(f"    > Recall = {recall}")
-    result = sa.evaluate_simulation_metric(
+    result = usa.evaluate_simulation_metric(
         params_opt,
         kripke_components,
         abstraction_shape,
         domain_lb,
         domain_ub,
-        horizon=1,
+        horizon=3,
         num_samples=64,
         batch_size=256,
         refine=False,
