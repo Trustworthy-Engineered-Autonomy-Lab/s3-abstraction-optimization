@@ -672,11 +672,11 @@ class UpwardSimulationEstimator:
                 worst_witness = witness.copy()
             epsilon_values[count] = value
 
-            if verbose and (
-                (count + 1) % progress_every == 0
-                or count + 1 == len(initial_states)
-            ):
-                print(f"Solved {count + 1} / {len(initial_states)} states")
+            # if verbose and (
+            #     (count + 1) % progress_every == 0
+            #     or count + 1 == len(initial_states)
+            # ):
+            #     print(f"Solved {count + 1} / {len(initial_states)} states")
 
         if not initial_states:
             epsilon = 0.0

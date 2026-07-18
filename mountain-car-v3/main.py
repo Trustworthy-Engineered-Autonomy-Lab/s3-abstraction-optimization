@@ -28,7 +28,7 @@ if __name__ == "__main__":
     gt_reach_fname = "mountain-car-v3/mc_reach_regions.pkl"
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [200, 200]
+    abstraction_shape = [50, 50]
     domain_lb = np.array([-1.2, -0.07])
     domain_ub = np.array([0.6, 0.07])
 
@@ -39,21 +39,21 @@ if __name__ == "__main__":
     # Initialize abstraction parameters
     key = jax.random.PRNGKey(0)
     sigma_u = 2.0
-    # u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
-    # u2 = jnp.zeros((abstraction_shape[1],))
-    key, k_u1, k_u2 = jax.random.split(key, 3)
-    u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
-    u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
+    u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
+    u2 = jnp.zeros((abstraction_shape[1],))
+    # key, k_u1, k_u2 = jax.random.split(key, 3)
+    # u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
+    # u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
     params = jnp.concatenate([u1, u2])
 
     args = {}
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
-    args['horizon'] = 3
-    args['temp_in'] = 0.01
-    args['temp_out'] = 0.01
-    args['inflation_coefs'] = [0.005, 0.0004]
+    args['horizon'] = 10
+    args['temp_in'] = 0.1
+    args['temp_out'] = 1.0
+    args['inflation_coefs'] = [0.018, 0.0014]
 
     # Evaluate initial abstraction
     recall, kripke_components = vt.build_and_verify_from_params(params,
@@ -80,6 +80,8 @@ if __name__ == "__main__":
     )
     print(f"    > Epsilon = {result.epsilon}")
     print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Min epsilon = {result.epsilon_min}")
+    print(f"    > Q1 epsilon = {result.epsilon_q1}")
     print(f"    > Median epsilon = {result.epsilon_median}")
     print(f"    > Q3 epsilon = {result.epsilon_q3}")
 
@@ -96,8 +98,8 @@ if __name__ == "__main__":
         params,
         mco.upward_proxy,
         args=args,
-        steps=101,
-        lr=100,
+        steps=500,
+        lr=5,
         grad_clip=1e3,
         print_every=1,
         record_every=100)
@@ -114,7 +116,7 @@ if __name__ == "__main__":
                                                                 log_time=True)
     print(f"Recall = {recall}")
     result = mcsa.evaluate_simulation_metric(
-        params,
+        params_opt,
         kripke_components,
         abstraction_shape,
         domain_lb,
@@ -127,5 +129,39 @@ if __name__ == "__main__":
     )
     print(f"    > Epsilon = {result.epsilon}")
     print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Min epsilon = {result.epsilon_min}")
+    print(f"    > Q1 epsilon = {result.epsilon_q1}")
     print(f"    > Median epsilon = {result.epsilon_median}")
     print(f"    > Q3 epsilon = {result.epsilon_q3}")
+
+
+    x_edges, y_edges = mco.extract_grid_params(
+        params_opt,
+        abstraction_shape,
+        domain_lb,
+        domain_ub,
+    )
+    x_gaps = np.diff(x_edges)
+    y_gaps = np.diff(y_edges)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for x_edge in x_edges:
+        ax.axvline(x_edge, color="tab:blue", linewidth=0.6, alpha=0.5)
+    for y_edge in y_edges:
+        ax.axhline(y_edge, color="tab:orange", linewidth=0.6, alpha=0.5)
+
+    ax.set_xlim(domain_lb[0], domain_ub[0])
+    ax.set_ylim(domain_lb[1], domain_ub[1])
+    ax.set_xlabel("Position")
+    ax.set_ylabel("Velocity")
+    ax.set_title(
+        "Final optimized abstraction grid\n"
+        f"x-gap range: [{x_gaps.min():.4f}, {x_gaps.max():.4f}], "
+        f"y-gap range: [{y_gaps.min():.4f}, {y_gaps.max():.4f}]"
+    )
+    ax.set_aspect("auto")
+    ax.grid(False)
+    fig.tight_layout()
+    plt.show()
+
+    
