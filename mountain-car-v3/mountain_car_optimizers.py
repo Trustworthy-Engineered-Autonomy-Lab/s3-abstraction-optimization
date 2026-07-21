@@ -4,7 +4,7 @@
 # =====================================================================
 
 # =====================================================================
-# Libraries for the synthetic system
+# Libraries for the mountain car system
 # =====================================================================
 
 import numpy as np
@@ -51,6 +51,6 @@ def gradient_descent(
             grad_norm_history.append(float(g_norm))
         
         if k % print_every == 0:
-            print(f"[{k}] J(p)={float(value):.6f}, |∇J(p)|={float(g_norm):.6f}")
+            print(f"[{k}] J(p)={float(value):.8f}, |∇J(p)|={float(g_norm):.8f}")
 
     return params_gd, np.array(cost_history), np.array(grad_norm_history)

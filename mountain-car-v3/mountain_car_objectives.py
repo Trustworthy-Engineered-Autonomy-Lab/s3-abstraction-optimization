@@ -10,15 +10,12 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from synthetic_system import dynamics_jax
-
-XSTAR = np.array([5.0, 5.0])
+from mountain_car_system import cl_system_numeric, cl_system_jax
 
 
 # =====================================================================
 # Objective functions
 # =====================================================================
-
 
 def image_area(
     params,
@@ -63,7 +60,7 @@ def image_area(
         ],
         axis=-2,
     )
-    x_next = dynamics_jax(corners, x_star=XSTAR)
+    x_next = cl_system_jax(corners)
 
     x1 = x_next[..., 0]
     x2 = x_next[..., 1]
@@ -75,82 +72,22 @@ def image_area(
     return jnp.sum(img_area)
 
 
-def epsilon_1_bound(
-    params,
-    *,
-    args,
+
+def upward_proxy_bruteforce(
+        params,
+        *,
+        args
     ):
     """
-    Upper-bound to epsilon-1 on the value-1 function.
+    Numpy implementation of the upward proxy.
     """
 
-    n1_internal, n2_internal = args['shape']
-    x1_lo, x2_lo = args['domain_lb']
-    x1_hi, x2_hi = args['domain_ub']
-
-    params = jnp.asarray(params)
-    u1 = params[:n1_internal]
-    u2 = params[n1_internal : n1_internal + n2_internal]
-
-    x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
-    x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
-
-    x1_los = x1_params[:-1]
-    x1_his = x1_params[1:]
-    x2_los = x2_params[:-1]
-    x2_his = x2_params[1:]
-
-    x1_lo_grid, x2_lo_grid = jnp.meshgrid(x1_los, x2_los, indexing="ij")
-    x1_hi_grid, x2_hi_grid = jnp.meshgrid(x1_his, x2_his, indexing="ij")
-
-    lower_bounds = jnp.stack([x1_lo_grid, x2_lo_grid], axis=-1)
-    upper_bounds = jnp.stack([x1_hi_grid, x2_hi_grid], axis=-1)
-    corners = jnp.stack(
-        [
-            lower_bounds,
-            jnp.stack([x1_lo_grid, x2_hi_grid], axis=-1),
-            upper_bounds,
-            jnp.stack([x1_hi_grid, x2_lo_grid], axis=-1),
-        ],
-        axis=-2,
-    )
-
-    centroids = 0.5 * (lower_bounds + upper_bounds)
-    next_corners = dynamics_jax(corners, x_star=XSTAR)
-    next_lower_bounds = jnp.min(next_corners, axis=-2)
-    next_upper_bounds = jnp.max(next_corners, axis=-2)
-    reachable_centroids = 0.5 * (next_lower_bounds + next_upper_bounds)
-
-    radii = 0.5 * jnp.linalg.norm(
-        next_upper_bounds - next_lower_bounds,
-        axis=-1,
-    )
-    center_offsets = (
-        dynamics_jax(centroids, x_star=XSTAR) - reachable_centroids
-    )
-    norm_epsilon = jnp.asarray(1e-12, dtype=params.dtype)
-    center_differences = jnp.sqrt(
-        jnp.sum(jnp.square(center_offsets), axis=-1) + norm_epsilon
-    )
-    return jnp.sum(radii + center_differences)
-
-
-def epsilon_H_bound(
-    params,
-    *,
-    args,
-    ):
-    """
-    Sum a smooth finite-horizon epsilon bound over all abstract cells.
-
-    The center of each cell is used as the concrete witness. Its enclosing
-    AABB is propagated through the dynamics and inflated after every step.
-    A temperature-scaled log-sum-exp smoothly aggregates the per-step bounds.
-    """
+    from itertools import product
 
     horizon = args['horizon']
-    temp = args['temp']
-    inflation_coef = args['inflation_coef']
+    inflation_coefs = np.asarray(args['inflation_coefs'])
+    temp_in = args['temp_in']
+    temp_out = args['temp_out']
 
     n1_internal, n2_internal = args['shape']
     x1_lo, x2_lo = args['domain_lb']
@@ -163,86 +100,74 @@ def epsilon_H_bound(
     x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
     x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
 
-    x1_los = x1_params[:-1]
-    x1_his = x1_params[1:]
-    x2_los = x2_params[:-1]
-    x2_his = x2_params[1:]
+    cell_values = []
+    for i in range(n1_internal):
+        x1_lo, x1_hi = x1_params[i], x1_params[i+1]
+        for j in range(n2_internal):
+            x2_lo, x2_hi = x2_params[j], x2_params[j+1]
 
-    x1_lo_grid, x2_lo_grid = jnp.meshgrid(x1_los, x2_los, indexing="ij")
-    x1_hi_grid, x2_hi_grid = jnp.meshgrid(x1_his, x2_his, indexing="ij")
-    lower_bounds = jnp.stack([x1_lo_grid, x2_lo_grid], axis=-1)
-    upper_bounds = jnp.stack([x1_hi_grid, x2_hi_grid], axis=-1)
+            # Current AABB
+            lower_bounds = np.array([x1_lo, x2_lo])
+            upper_bounds = np.array([x1_hi, x2_hi])
+            all_verts = [list(combo) for combo in product(*zip(lower_bounds, upper_bounds))]
+            all_verts = np.array(all_verts)
+            xk = (lower_bounds + upper_bounds) / 2.0
 
-    def aabb_corners(lower, upper):
-        return jnp.stack(
-            [
-                lower,
-                jnp.stack([lower[..., 0], upper[..., 1]], axis=-1),
-                upper,
-                jnp.stack([upper[..., 0], lower[..., 1]], axis=-1),
-            ],
-            axis=-2,
-        )
+            # Iterate over horizon
+            s_values = []
+            for _ in range(horizon):
 
-    witnesses = 0.5 * (lower_bounds + upper_bounds)
-    corners = aabb_corners(lower_bounds, upper_bounds)
-    inflation_coef = jnp.asarray(inflation_coef, dtype=params.dtype)
-    temp = jnp.asarray(temp, dtype=params.dtype)
-    norm_epsilon = jnp.asarray(1e-12, dtype=params.dtype)
+                # Push the concrete witness through dynamics
+                xk = cl_system_jax(xk)
 
-    def rollout_step(carry, _):
-        witness, current_corners = carry
-        witness = dynamics_jax(witness, x_star=XSTAR)
-        next_corners = dynamics_jax(current_corners, x_star=XSTAR)
-        next_lower_bounds = jnp.min(next_corners, axis=-2)
-        next_upper_bounds = jnp.max(next_corners, axis=-2)
+                # Determine propagated verts (rough reachable approx.)
+                next_verts = np.array([
+                    cl_system_jax(vert) for vert in all_verts
+                ])
+                next_lower_bounds = next_verts.min(axis=0)
+                next_upper_bounds = next_verts.max(axis=0)
 
-        reach_centroids = 0.5 * (next_lower_bounds + next_upper_bounds)
-        reach_radii = 0.5 * jnp.linalg.norm(
-            next_upper_bounds - next_lower_bounds,
-            axis=-1,
-        )
-        witness_offsets = witness - reach_centroids
-        witness_differences = jnp.sqrt(
-            jnp.sum(jnp.square(witness_offsets), axis=-1) + norm_epsilon
-        )
-        step_bounds = reach_radii + witness_differences
+                # Rough reachable AABB dimensions
+                reach_centroid = (next_upper_bounds + next_lower_bounds) / 2.0
+                reach_radius = 0.5 * np.linalg.norm(next_upper_bounds - next_lower_bounds)
 
-        inflated_lower_bounds = next_lower_bounds - inflation_coef
-        inflated_upper_bounds = next_upper_bounds + inflation_coef
-        inflated_corners = aabb_corners(
-            inflated_lower_bounds,
-            inflated_upper_bounds,
-        )
-        return (witness, inflated_corners), step_bounds
+                # s_value calculation
+                witness_diff = np.linalg.norm(xk - reach_centroid)
+                sk = reach_radius + witness_diff
+                s_values.append(sk)
 
-    _, step_bounds = jax.lax.scan(
-        rollout_step,
-        (witnesses, corners),
-        xs=None,
-        length=horizon,
-    )
-    per_cell_bounds = temp * jax.scipy.special.logsumexp(
-        step_bounds / temp,
-        axis=0,
-    )
-    return jnp.sum(per_cell_bounds)
+                # Inflate AABB and update all vertices
+                next_upper_bounds += inflation_coefs
+                next_lower_bounds -= inflation_coefs
+                all_verts = [list(combo) for combo in product(*zip(next_upper_bounds, next_lower_bounds))]
+                all_verts = np.array(all_verts)
 
+            # Log-sum-exp over s-values
+            s_values = np.asarray(s_values)
+            val = temp_in * np.log(np.sum(np.exp(s_values / temp_in)))
+            cell_values.append(val)
+
+    # Log-sum-exp over cell values
+    cell_values = np.asarray(cell_values)
+    epsilon = temp_out * np.log(np.sum(np.exp(cell_values / temp_out)))
+
+    return epsilon
 
 
 def upward_proxy(
     params,
     *,
     args,
+    batch_size=4096,
     ):
     """
-    LSE over a smooth finite-horizon epsilon bound.
+    Batched JAX implementation of the finite-horizon upward proxy.
     """
 
     horizon = args['horizon']
+    inflation_coefs = args['inflation_coefs']
     temp_in = args['temp_in']
     temp_out = args['temp_out']
-    inflation_coefs = args['inflation_coefs']
 
     n1_internal, n2_internal = args['shape']
     x1_lo, x2_lo = args['domain_lb']
@@ -255,73 +180,325 @@ def upward_proxy(
     x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
     x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
 
-    x1_los = x1_params[:-1]
-    x1_his = x1_params[1:]
-    x2_los = x2_params[:-1]
-    x2_his = x2_params[1:]
+    x1_widths = jnp.diff(x1_params)
+    x2_widths = jnp.diff(x2_params)
+    x1_centers = 0.5 * (x1_params[:-1] + x1_params[1:])
+    x2_centers = 0.5 * (x2_params[:-1] + x2_params[1:])
 
-    x1_lo_grid, x2_lo_grid = jnp.meshgrid(x1_los, x2_los, indexing="ij")
-    x1_hi_grid, x2_hi_grid = jnp.meshgrid(x1_his, x2_his, indexing="ij")
-    lower_bounds = jnp.stack([x1_lo_grid, x2_lo_grid], axis=-1)
-    upper_bounds = jnp.stack([x1_hi_grid, x2_hi_grid], axis=-1)
+    centroids = jnp.stack(
+        jnp.meshgrid(x1_centers, x2_centers, indexing="ij"),
+        axis=-1,
+    ).reshape((-1, 2))
+    half_spans = 0.5 * jnp.stack(
+        jnp.meshgrid(x1_widths, x2_widths, indexing="ij"),
+        axis=-1,
+    ).reshape((-1, 2))
 
-    def aabb_corners(lower, upper):
-        return jnp.stack(
-            [
-                lower,
-                jnp.stack([lower[..., 0], upper[..., 1]], axis=-1),
-                upper,
-                jnp.stack([upper[..., 0], lower[..., 1]], axis=-1),
-            ],
-            axis=-2,
-        )
+    batch_size = int(batch_size)
+    num_cells = centroids.shape[0]
+    pad = (-num_cells) % batch_size
+    padded_num_cells = num_cells + pad
 
-    witnesses = 0.5 * (lower_bounds + upper_bounds)
-    corners = aabb_corners(lower_bounds, upper_bounds)
+    centroids = jnp.pad(centroids, ((0, pad), (0, 0)))
+    half_spans = jnp.pad(half_spans, ((0, pad), (0, 0)))
+    valid_mask = jnp.arange(padded_num_cells) < num_cells
+
+    centroid_batches = centroids.reshape((-1, batch_size, 2))
+    half_span_batches = half_spans.reshape((-1, batch_size, 2))
+    mask_batches = valid_mask.reshape((-1, batch_size))
     inflation_coefs = jnp.asarray(inflation_coefs, dtype=params.dtype)
     temp_in = jnp.asarray(temp_in, dtype=params.dtype)
     temp_out = jnp.asarray(temp_out, dtype=params.dtype)
     norm_epsilon = jnp.asarray(1e-12, dtype=params.dtype)
-
-    def rollout_step(carry, _):
-        witness, current_corners = carry
-        witness = dynamics_jax(witness, x_star=XSTAR)
-        next_corners = dynamics_jax(current_corners, x_star=XSTAR)
-        next_lower_bounds = jnp.min(next_corners, axis=-2)
-        next_upper_bounds = jnp.max(next_corners, axis=-2)
-
-        reach_centroids = 0.5 * (next_lower_bounds + next_upper_bounds)
-        reach_radii = 0.5 * jnp.linalg.norm(
-            next_upper_bounds - next_lower_bounds,
-            axis=-1,
-        )
-        witness_offsets = witness - reach_centroids
-        witness_differences = jnp.sqrt(
-            jnp.sum(jnp.square(witness_offsets), axis=-1) + norm_epsilon
-        )
-        step_bounds = reach_radii + witness_differences
-
-        inflated_lower_bounds = next_lower_bounds - inflation_coefs
-        inflated_upper_bounds = next_upper_bounds + inflation_coefs
-        inflated_corners = aabb_corners(
-            inflated_lower_bounds,
-            inflated_upper_bounds,
-        )
-        return (witness, inflated_corners), step_bounds
-
-    _, step_bounds = jax.lax.scan(
-        rollout_step,
-        (witnesses, corners),
-        xs=None,
-        length=horizon,
+    corner_signs = jnp.asarray(
+        [
+            [-1.0, -1.0],
+            [-1.0, 1.0],
+            [1.0, 1.0],
+            [1.0, -1.0],
+        ],
+        dtype=params.dtype,
     )
-    per_cell_bounds = temp_in * jax.scipy.special.logsumexp(
-        step_bounds / temp_in,
-        axis=0,
-    )
-    overall_bound = temp_out * jax.scipy.special.logsumexp(step_bounds / temp_out)
 
-    return overall_bound
+    def evaluate_batch(unused, batch):
+        centroid_batch, half_span_batch, mask_batch = batch
+        initial_corners = (
+            centroid_batch[:, None, :]
+            + half_span_batch[:, None, :] * corner_signs[None, :, :]
+        )
+
+        def rollout_step(carry, _):
+            witness, current_corners = carry
+            witness = cl_system_jax(witness)
+            next_corners = cl_system_jax(current_corners)
+            next_lower_bounds = jnp.min(next_corners, axis=1)
+            next_upper_bounds = jnp.max(next_corners, axis=1)
+            reach_centroids = 0.5 * (
+                next_lower_bounds + next_upper_bounds
+            )
+
+            image_spans = next_upper_bounds - next_lower_bounds
+            reach_radii = 0.5 * jnp.sqrt(
+                jnp.sum(jnp.square(image_spans), axis=-1) + norm_epsilon
+            )
+            witness_offsets = witness - reach_centroids
+            witness_differences = jnp.sqrt(
+                jnp.sum(jnp.square(witness_offsets), axis=-1)
+                + norm_epsilon
+            )
+            step_values = reach_radii + witness_differences
+
+            inflated_half_spans = 0.5 * image_spans + inflation_coefs
+            inflated_corners = (
+                reach_centroids[:, None, :]
+                + inflated_half_spans[:, None, :]
+                * corner_signs[None, :, :]
+            )
+            return (witness, inflated_corners), step_values
+
+        carry = (centroid_batch, initial_corners)
+        step_value_list = []
+        for _ in range(horizon):
+            carry, values = rollout_step(carry, None)
+            step_value_list.append(values)
+        step_values = jnp.stack(step_value_list, axis=0)
+
+        per_cell_values = temp_in * jax.scipy.special.logsumexp(
+            step_values / temp_in,
+            axis=0,
+        )
+        per_cell_values = jnp.where(
+            mask_batch,
+            per_cell_values,
+            -jnp.inf,
+        )
+        return unused, per_cell_values
+
+    _, per_cell_value_batches = jax.lax.scan(
+        evaluate_batch,
+        jnp.asarray(0.0, dtype=params.dtype),
+        (centroid_batches, half_span_batches, mask_batches),
+    )
+    return temp_out * jax.scipy.special.logsumexp(
+        per_cell_value_batches / temp_out,
+    )
+
+def epsilon_sum(
+    params,
+    *,
+    args,
+    batch_size=4096,
+    ):
+    """
+    Batched JAX implementation of the finite-horizon upward proxy.
+    """
+
+    horizon = args['horizon']
+    inflation_coefs = args['inflation_coefs']
+    temp_in = args['temp_in']
+    temp_out = args['temp_out']
+
+    n1_internal, n2_internal = args['shape']
+    x1_lo, x2_lo = args['domain_lb']
+    x1_hi, x2_hi = args['domain_ub']
+
+    params = jnp.asarray(params)
+    u1 = params[:n1_internal]
+    u2 = params[n1_internal : n1_internal + n2_internal]
+
+    x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
+    x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
+
+    x1_widths = jnp.diff(x1_params)
+    x2_widths = jnp.diff(x2_params)
+    x1_centers = 0.5 * (x1_params[:-1] + x1_params[1:])
+    x2_centers = 0.5 * (x2_params[:-1] + x2_params[1:])
+
+    centroids = jnp.stack(
+        jnp.meshgrid(x1_centers, x2_centers, indexing="ij"),
+        axis=-1,
+    ).reshape((-1, 2))
+    half_spans = 0.5 * jnp.stack(
+        jnp.meshgrid(x1_widths, x2_widths, indexing="ij"),
+        axis=-1,
+    ).reshape((-1, 2))
+
+    batch_size = int(batch_size)
+    num_cells = centroids.shape[0]
+    pad = (-num_cells) % batch_size
+    padded_num_cells = num_cells + pad
+
+    centroids = jnp.pad(centroids, ((0, pad), (0, 0)))
+    half_spans = jnp.pad(half_spans, ((0, pad), (0, 0)))
+    valid_mask = jnp.arange(padded_num_cells) < num_cells
+
+    centroid_batches = centroids.reshape((-1, batch_size, 2))
+    half_span_batches = half_spans.reshape((-1, batch_size, 2))
+    mask_batches = valid_mask.reshape((-1, batch_size))
+    inflation_coefs = jnp.asarray(inflation_coefs, dtype=params.dtype)
+    temp_in = jnp.asarray(temp_in, dtype=params.dtype)
+    temp_out = jnp.asarray(temp_out, dtype=params.dtype)
+    norm_epsilon = jnp.asarray(1e-12, dtype=params.dtype)
+    corner_signs = jnp.asarray(
+        [
+            [-1.0, -1.0],
+            [-1.0, 1.0],
+            [1.0, 1.0],
+            [1.0, -1.0],
+        ],
+        dtype=params.dtype,
+    )
+
+    def evaluate_batch(unused, batch):
+        centroid_batch, half_span_batch, mask_batch = batch
+        initial_corners = (
+            centroid_batch[:, None, :]
+            + half_span_batch[:, None, :] * corner_signs[None, :, :]
+        )
+
+        def rollout_step(carry, _):
+            witness, current_corners = carry
+            witness = cl_system_jax(witness)
+            next_corners = cl_system_jax(current_corners)
+            next_lower_bounds = jnp.min(next_corners, axis=1)
+            next_upper_bounds = jnp.max(next_corners, axis=1)
+            reach_centroids = 0.5 * (
+                next_lower_bounds + next_upper_bounds
+            )
+
+            image_spans = next_upper_bounds - next_lower_bounds
+            reach_radii = 0.5 * jnp.sqrt(
+                jnp.sum(jnp.square(image_spans), axis=-1) + norm_epsilon
+            )
+            witness_offsets = witness - reach_centroids
+            witness_differences = jnp.sqrt(
+                jnp.sum(jnp.square(witness_offsets), axis=-1)
+                + norm_epsilon
+            )
+            step_values = reach_radii + witness_differences
+
+            inflated_half_spans = 0.5 * image_spans + inflation_coefs
+            inflated_corners = (
+                reach_centroids[:, None, :]
+                + inflated_half_spans[:, None, :]
+                * corner_signs[None, :, :]
+            )
+            return (witness, inflated_corners), step_values
+
+        carry = (centroid_batch, initial_corners)
+        step_value_list = []
+        for _ in range(horizon):
+            carry, values = rollout_step(carry, None)
+            step_value_list.append(values)
+        step_values = jnp.stack(step_value_list, axis=0)
+
+        per_cell_values = temp_in * jax.scipy.special.logsumexp(
+            step_values / temp_in,
+            axis=0,
+        )
+        per_cell_values = jnp.where(
+            mask_batch,
+            per_cell_values,
+            jnp.zeros_like(per_cell_values),
+        )
+        return unused, per_cell_values
+
+    _, per_cell_value_batches = jax.lax.scan(
+        evaluate_batch,
+        jnp.asarray(0.0, dtype=params.dtype),
+        (centroid_batches, half_span_batches, mask_batches),
+    )
+    return jnp.sum(per_cell_value_batches)
+
+
+# def epsilon_H_bound(
+#     params,
+#     *,
+#     args,
+#     ):
+#     """
+#     Sum a smooth finite-horizon epsilon bound over all abstract cells.
+#     """
+
+#     horizon = args['horizon']
+#     temp = args['temp']
+#     inflation_coefs = args['inflation_coefs']
+
+#     n1_internal, n2_internal = args['shape']
+#     x1_lo, x2_lo = args['domain_lb']
+#     x1_hi, x2_hi = args['domain_ub']
+
+#     params = jnp.asarray(params)
+#     u1 = params[:n1_internal]
+#     u2 = params[n1_internal : n1_internal + n2_internal]
+
+#     x1_params = make_lines_from_gaps(u1, x1_lo, x1_hi)
+#     x2_params = make_lines_from_gaps(u2, x2_lo, x2_hi)
+
+#     x1_los = x1_params[:-1]
+#     x1_his = x1_params[1:]
+#     x2_los = x2_params[:-1]
+#     x2_his = x2_params[1:]
+
+#     x1_lo_grid, x2_lo_grid = jnp.meshgrid(x1_los, x2_los, indexing="ij")
+#     x1_hi_grid, x2_hi_grid = jnp.meshgrid(x1_his, x2_his, indexing="ij")
+#     lower_bounds = jnp.stack([x1_lo_grid, x2_lo_grid], axis=-1)
+#     upper_bounds = jnp.stack([x1_hi_grid, x2_hi_grid], axis=-1)
+
+#     def aabb_corners(lower, upper):
+#         return jnp.stack(
+#             [
+#                 lower,
+#                 jnp.stack([lower[..., 0], upper[..., 1]], axis=-1),
+#                 upper,
+#                 jnp.stack([upper[..., 0], lower[..., 1]], axis=-1),
+#             ],
+#             axis=-2,
+#         )
+
+#     witnesses = 0.5 * (lower_bounds + upper_bounds)
+#     corners = aabb_corners(lower_bounds, upper_bounds)
+#     inflation_coefs = jnp.asarray(inflation_coefs, dtype=params.dtype)
+#     temp = jnp.asarray(temp, dtype=params.dtype)
+#     norm_epsilon = jnp.asarray(1e-12, dtype=params.dtype)
+
+#     def rollout_step(carry, _):
+#         witness, current_corners = carry
+#         witness = cl_system_jax(witness)
+#         next_corners = cl_system_jax(current_corners)
+#         next_lower_bounds = jnp.min(next_corners, axis=-2)
+#         next_upper_bounds = jnp.max(next_corners, axis=-2)
+
+#         reach_centroids = 0.5 * (next_lower_bounds + next_upper_bounds)
+#         reach_spans = next_upper_bounds - next_lower_bounds
+#         reach_radii = 0.5 * jnp.sqrt(
+#             jnp.sum(jnp.square(reach_spans), axis=-1) + norm_epsilon
+#         )
+#         witness_offsets = witness - reach_centroids
+#         witness_differences = jnp.sqrt(
+#             jnp.sum(jnp.square(witness_offsets), axis=-1) + norm_epsilon
+#         )
+#         step_bounds = reach_radii + witness_differences
+
+#         inflated_lower_bounds = next_lower_bounds - inflation_coefs
+#         inflated_upper_bounds = next_upper_bounds + inflation_coefs
+#         inflated_corners = aabb_corners(
+#             inflated_lower_bounds,
+#             inflated_upper_bounds,
+#         )
+#         return (witness, inflated_corners), step_bounds
+
+#     _, step_bounds = jax.lax.scan(
+#         rollout_step,
+#         (witnesses, corners),
+#         xs=None,
+#         length=horizon,
+#     )
+#     per_cell_bounds = temp * jax.scipy.special.logsumexp(
+#         step_bounds / temp,
+#         axis=0,
+#     )
+#     return jnp.sum(per_cell_bounds)
 
 # def epsilon_H_bound(
 #         params,
