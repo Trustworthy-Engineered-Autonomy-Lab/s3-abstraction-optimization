@@ -47,8 +47,8 @@ def collect_data(fname):
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
-    args['temp_in'] = 0.2
-    args['temp_out'] = 0.2
+    args['temp_in'] = 0.1
+    args['temp_out'] = 0.1
     args['inflation_coefs'] = np.array([0.05, 0.05])
 
     horizons = [1, 2, 3, 4, 5]
@@ -358,7 +358,7 @@ if __name__ == "__main__":
 
     fname = case_study_dir / "proxy_analysis_data.pkl"
 
-    # collect_data(fname)
+    collect_data(fname)
 
     with open(fname, "rb") as f:
         data = pkl.load(f)

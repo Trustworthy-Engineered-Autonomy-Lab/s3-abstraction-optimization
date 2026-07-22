@@ -359,7 +359,7 @@ if __name__ == "__main__":
 
     fname = case_study_dir / "proxy_analysis_data.pkl"
 
-    collect_data(fname)
+    # collect_data(fname)
 
     with open(fname, "rb") as f:
         data = pkl.load(f)
