@@ -51,7 +51,7 @@ if __name__ == "__main__":
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
-    args['horizon'] = 5
+    args['horizon'] = 1
     # args['temp'] = 2.0
     args['inflation_coefs'] = np.array([0.14, 0.14])
     args['temp_in'] = 1.0
@@ -91,38 +91,38 @@ if __name__ == "__main__":
     print(f"    > Median epsilon = {result.epsilon_median}")
     print(f"    > Q3 epsilon = {result.epsilon_q3}")
 
-    # # Employ gradient descent to optimize the grid
-    # params_opt, cost_history, grad_norm_history = s_opt.gradient_descent(
-    #     params,
-    #     so.upward_proxy,
-    #     args=args,
-    #     steps=1000,
-    #     lr=200,
-    #     grad_clip=1e3,
-    #     print_every=100,
-    #     record_every=100)
+    # Employ gradient descent to optimize the grid
+    params_opt, cost_history, grad_norm_history = s_opt.gradient_descent(
+        params,
+        so.upward_proxy,
+        args=args,
+        steps=1000,
+        lr=200,
+        grad_clip=1e3,
+        print_every=100,
+        record_every=100)
 
-    # # Evaluate final abstraction
-    # recall, kripke_components = vt.build_and_verify_from_params(params_opt,
-    #                                                             abstraction_shape,
-    #                                                             domain_lb,
-    #                                                             domain_ub,
-    #                                                             init_domain_lb,
-    #                                                             init_domain_ub,
-    #                                                             gt_reach_fname=gt_reach_fname,
-    #                                                             verbose=True,
-    #                                                             log_time=True)
-    # print(f"Recall = {recall}")
-    # result = ssa.evaluate_simulation_metric(params_opt,
-    #                                         kripke_components,
-    #                                         abstraction_shape,
-    #                                         domain_lb,
-    #                                         domain_ub,
-    #                                         horizon=args['horizon'])
-    # print(f"    > Epsilon = {result.epsilon}")
-    # print(f"    > Mean epsilon = {result.epsilon_mean}")
-    # print(f"    > Median epsilon = {result.epsilon_median}")
-    # print(f"    > Q3 epsilon = {result.epsilon_q3}")
+    # Evaluate final abstraction
+    recall, kripke_components = vt.build_and_verify_from_params(params_opt,
+                                                                abstraction_shape,
+                                                                domain_lb,
+                                                                domain_ub,
+                                                                init_domain_lb,
+                                                                init_domain_ub,
+                                                                gt_reach_fname=gt_reach_fname,
+                                                                verbose=True,
+                                                                log_time=True)
+    print(f"Recall = {recall}")
+    result = ssa.evaluate_simulation_metric(params_opt,
+                                            kripke_components,
+                                            abstraction_shape,
+                                            domain_lb,
+                                            domain_ub,
+                                            horizon=args['horizon'])
+    print(f"    > Epsilon = {result.epsilon}")
+    print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Median epsilon = {result.epsilon_median}")
+    print(f"    > Q3 epsilon = {result.epsilon_q3}")
 
 
     # x_edges, y_edges = so.extract_grid_params(

@@ -319,7 +319,7 @@ def upward_proxy(
         step_bounds / temp_in,
         axis=0,
     )
-    overall_bound = temp_out * jax.scipy.special.logsumexp(step_bounds / temp_out)
+    overall_bound = temp_out * jax.scipy.special.logsumexp(per_cell_bounds / temp_out)
 
     return overall_bound
 

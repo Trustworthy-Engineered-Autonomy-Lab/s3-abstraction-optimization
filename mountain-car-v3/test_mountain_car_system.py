@@ -122,6 +122,35 @@ class MountainCarDerivativeTests(unittest.TestCase):
         np.testing.assert_allclose(batched, expected, atol=7e-8, rtol=0.0)
         np.testing.assert_allclose(jitted, expected, atol=7e-8, rtol=0.0)
 
+    def test_interval_closed_loop_contains_samples_across_switches(self) -> None:
+        rng = np.random.default_rng(13)
+        boxes = [
+            (
+                np.array([system.MIN_POSITION, system.MIN_VELOCITY]),
+                np.array([-1.10, -0.04]),
+            ),
+            (np.array([-0.55, -0.01]), np.array([-0.35, 0.02])),
+            (np.array([0.25, -0.07]), np.array([0.40, -0.055])),
+            (np.array([0.45, 0.04]), np.array([system.MAX_POSITION, 0.07])),
+        ]
+        for lower, upper in boxes:
+            image_lower, image_upper = system.interval_cl_system(lower, upper)
+            samples = np.vstack(
+                [lower, upper, rng.uniform(lower, upper, size=(128, 2))]
+            )
+            images = np.stack(
+                [system.cl_system_numeric(sample) for sample in samples]
+            )
+            self.assertTrue(np.all(images >= image_lower - 1e-12))
+            self.assertTrue(np.all(images <= image_upper + 1e-12))
+
+            jax_lower, jax_upper = system.interval_cl_system_jax(
+                jnp.asarray(lower, dtype=jnp.float32),
+                jnp.asarray(upper, dtype=jnp.float32),
+            )
+            np.testing.assert_allclose(jax_lower, image_lower, atol=2e-7, rtol=0.0)
+            np.testing.assert_allclose(jax_upper, image_upper, atol=2e-7, rtol=0.0)
+
     def test_jax_state_jacobian_matches_cached_analytic_jacobian(self) -> None:
         state = jnp.asarray(self.state, dtype=jnp.float32)
         jax_jacobian = jax.jacfwd(system.cl_system_jax)(state)

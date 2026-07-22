@@ -18,6 +18,7 @@ import jax.numpy as jnp
 import pickle as pkl
 import time
 from itertools import product
+from pathlib import Path
 
 XSTAR = np.array([5.0, 5.0])
 
@@ -285,5 +286,6 @@ if __name__ == "__main__":
 
     gt_reach_regions = get_gt_reach_regions(domain_lb, domain_ub, verbose=True)
 
-    with open("mountain-car-v3/mc_reach_regions.pkl", "wb") as f:
+    output_path = Path(__file__).with_name("mc_reach_regions.pkl")
+    with output_path.open("wb") as f:
         pkl.dump(gt_reach_regions, f)

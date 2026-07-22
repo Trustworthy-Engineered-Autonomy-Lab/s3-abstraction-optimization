@@ -329,6 +329,224 @@ def cl_system(state: np.ndarray) -> np.ndarray:
 
 
 # =====================================================================
+# Certified interval closed-loop dynamics
+# =====================================================================
+
+def _actor_interval(
+    lower: np.ndarray,
+    upper: np.ndarray,
+) -> tuple[float, float]:
+    """Return an interval enclosure of the actor on ``[lower, upper]``.
+
+    This is standard interval-bound propagation (IBP) through the two ReLU
+    layers and the monotone tanh output.  Unlike a sampled Hessian, it remains
+    valid when the input box crosses neural-network activation boundaries.
+    """
+
+    z1_lower, z1_upper = _affine_interval(_W1, _B1, lower, upper)
+    h1_lower = np.maximum(z1_lower, 0.0)
+    h1_upper = np.maximum(z1_upper, 0.0)
+
+    z2_lower, z2_upper = _affine_interval(
+        _W2, _B2, h1_lower, h1_upper
+    )
+    h2_lower = np.maximum(z2_lower, 0.0)
+    h2_upper = np.maximum(z2_upper, 0.0)
+
+    z3_lower, z3_upper = _affine_interval(
+        _W3, _B3, h2_lower, h2_upper
+    )
+    normalized_lower = math.tanh(float(z3_lower[0]))
+    normalized_upper = math.tanh(float(z3_upper[0]))
+    action_candidates = (
+        _ACTION_SCALE * normalized_lower + _ACTION_BIAS,
+        _ACTION_SCALE * normalized_upper + _ACTION_BIAS,
+    )
+    return (
+        max(-1.0, min(1.0, min(action_candidates))),
+        max(-1.0, min(1.0, max(action_candidates))),
+    )
+
+
+def interval_cl_system(
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Certify a closed-loop post-image AABB for a state-space box.
+
+    The actor is enclosed by IBP.  The cosine range is exact on the supplied
+    position interval, and the plant's clips and left-wall reset are handled
+    by interval extensions of the corresponding environment operations.
+    The result is valid across ReLU, clipping, and reset boundaries.
+    """
+
+    lower, upper = _validate_box(lower_bounds, upper_bounds)
+    action_lower, action_upper = _actor_interval(lower, upper)
+    cos_lower, cos_upper = _cos_interval(3.0 * lower[0], 3.0 * upper[0])
+
+    raw_velocity_lower = (
+        lower[1] + POWER * action_lower - GRAVITY * cos_upper
+    )
+    raw_velocity_upper = (
+        upper[1] + POWER * action_upper - GRAVITY * cos_lower
+    )
+    velocity_lower = float(np.clip(
+        raw_velocity_lower, MIN_VELOCITY, MAX_VELOCITY
+    ))
+    velocity_upper = float(np.clip(
+        raw_velocity_upper, MIN_VELOCITY, MAX_VELOCITY
+    ))
+
+    raw_position_lower = lower[0] + velocity_lower
+    raw_position_upper = upper[0] + velocity_upper
+    position_lower = float(np.clip(
+        raw_position_lower, MIN_POSITION, MAX_POSITION
+    ))
+    position_upper = float(np.clip(
+        raw_position_upper, MIN_POSITION, MAX_POSITION
+    ))
+
+    # A negative velocity is reset to zero only when the unclipped position
+    # can hit the left wall.  Including zero in that case encloses both reset
+    # and non-reset branches without polluting every velocity interval.
+    reset_is_possible = (
+        raw_position_lower <= MIN_POSITION and velocity_lower < 0.0
+    )
+    if reset_is_possible:
+        velocity_lower = min(velocity_lower, 0.0)
+        velocity_upper = max(velocity_upper, 0.0)
+
+    return (
+        np.array([position_lower, velocity_lower], dtype=np.float64),
+        np.array([position_upper, velocity_upper], dtype=np.float64),
+    )
+
+
+def _affine_interval_jax(matrix, bias, lower, upper):
+    """Batched JAX interval extension of an affine map."""
+
+    positive = jnp.maximum(matrix, 0.0)
+    negative = jnp.minimum(matrix, 0.0)
+    out_lower = (
+        jnp.matmul(lower, positive.T)
+        + jnp.matmul(upper, negative.T)
+        + bias
+    )
+    out_upper = (
+        jnp.matmul(upper, positive.T)
+        + jnp.matmul(lower, negative.T)
+        + bias
+    )
+    return out_lower, out_upper
+
+
+def _cos_interval_jax(lower, upper):
+    """Exact cosine interval with batched, JAX-compatible inputs."""
+
+    first = lower
+    second = upper
+    lower = jnp.minimum(first, second)
+    upper = jnp.maximum(first, second)
+    endpoint_lower = jnp.minimum(jnp.cos(lower), jnp.cos(upper))
+    endpoint_upper = jnp.maximum(jnp.cos(lower), jnp.cos(upper))
+    period = jnp.asarray(2.0 * math.pi, dtype=lower.dtype)
+
+    def contains(phase):
+        first = jnp.ceil((lower - phase) / period)
+        last = jnp.floor((upper - phase) / period)
+        return first <= last
+
+    spans_period = upper - lower >= period
+    out_lower = jnp.where(
+        spans_period | contains(jnp.asarray(math.pi, dtype=lower.dtype)),
+        -jnp.ones_like(endpoint_lower),
+        endpoint_lower,
+    )
+    out_upper = jnp.where(
+        spans_period | contains(jnp.asarray(0.0, dtype=lower.dtype)),
+        jnp.ones_like(endpoint_upper),
+        endpoint_upper,
+    )
+    return out_lower, out_upper
+
+
+def interval_cl_system_jax(lower_bounds, upper_bounds):
+    """Differentiable batched counterpart of :func:`interval_cl_system`."""
+
+    lower = _validate_state_shape_jax(lower_bounds, name="lower_bounds")
+    upper = _validate_state_shape_jax(upper_bounds, name="upper_bounds")
+
+    z1_lower, z1_upper = _affine_interval_jax(
+        _JAX_W1, _JAX_B1, lower, upper
+    )
+    h1_lower = jax.nn.relu(z1_lower)
+    h1_upper = jax.nn.relu(z1_upper)
+    z2_lower, z2_upper = _affine_interval_jax(
+        _JAX_W2, _JAX_B2, h1_lower, h1_upper
+    )
+    h2_lower = jax.nn.relu(z2_lower)
+    h2_upper = jax.nn.relu(z2_upper)
+    z3_lower, z3_upper = _affine_interval_jax(
+        _JAX_W3, _JAX_B3, h2_lower, h2_upper
+    )
+    normalized_lower = jnp.tanh(jnp.squeeze(z3_lower, axis=-1))
+    normalized_upper = jnp.tanh(jnp.squeeze(z3_upper, axis=-1))
+    action_first = _JAX_ACTION_SCALE * normalized_lower + _JAX_ACTION_BIAS
+    action_second = _JAX_ACTION_SCALE * normalized_upper + _JAX_ACTION_BIAS
+    action_lower = jnp.clip(jnp.minimum(action_first, action_second), -1.0, 1.0)
+    action_upper = jnp.clip(jnp.maximum(action_first, action_second), -1.0, 1.0)
+
+    position_lower = lower[..., 0]
+    position_upper = upper[..., 0]
+    velocity_lower = lower[..., 1]
+    velocity_upper = upper[..., 1]
+    cos_lower, cos_upper = _cos_interval_jax(
+        3.0 * position_lower,
+        3.0 * position_upper,
+    )
+    raw_velocity_lower = (
+        velocity_lower + POWER * action_lower - GRAVITY * cos_upper
+    )
+    raw_velocity_upper = (
+        velocity_upper + POWER * action_upper - GRAVITY * cos_lower
+    )
+    next_velocity_lower = jnp.clip(
+        raw_velocity_lower, MIN_VELOCITY, MAX_VELOCITY
+    )
+    next_velocity_upper = jnp.clip(
+        raw_velocity_upper, MIN_VELOCITY, MAX_VELOCITY
+    )
+
+    raw_position_lower = position_lower + next_velocity_lower
+    raw_position_upper = position_upper + next_velocity_upper
+    next_position_lower = jnp.clip(
+        raw_position_lower, MIN_POSITION, MAX_POSITION
+    )
+    next_position_upper = jnp.clip(
+        raw_position_upper, MIN_POSITION, MAX_POSITION
+    )
+
+    reset_is_possible = (
+        (raw_position_lower <= MIN_POSITION) & (next_velocity_lower < 0.0)
+    )
+    next_velocity_lower = jnp.where(
+        reset_is_possible,
+        jnp.minimum(next_velocity_lower, 0.0),
+        next_velocity_lower,
+    )
+    next_velocity_upper = jnp.where(
+        reset_is_possible,
+        jnp.maximum(next_velocity_upper, 0.0),
+        next_velocity_upper,
+    )
+
+    return (
+        jnp.stack([next_position_lower, next_velocity_lower], axis=-1),
+        jnp.stack([next_position_upper, next_velocity_upper], axis=-1),
+    )
+
+
+# =====================================================================
 # Exact point derivatives within one smooth branch
 # =====================================================================
 

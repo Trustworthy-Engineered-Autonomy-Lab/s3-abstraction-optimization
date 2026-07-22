@@ -124,6 +124,23 @@ if __name__ == "__main__":
         shape,
         domain_lb,
         domain_ub,
+        horizon=2,
+        num_samples=64,
+        batch_size=256,
+        refine=False,
+        verbose=False,
+    )
+    print(f"    > Epsilon = {result.epsilon}")
+    print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Median epsilon = {result.epsilon_median}")
+    print(f"    > Q3 epsilon = {result.epsilon_q3}")
+
+    result = usa.evaluate_simulation_metric(
+        params,
+        kripke_components,
+        shape,
+        domain_lb,
+        domain_ub,
         horizon=3,
         num_samples=64,
         batch_size=256,
@@ -134,3 +151,39 @@ if __name__ == "__main__":
     print(f"    > Mean epsilon = {result.epsilon_mean}")
     print(f"    > Median epsilon = {result.epsilon_median}")
     print(f"    > Q3 epsilon = {result.epsilon_q3}")
+
+
+    result = usa.evaluate_simulation_metric(
+            params,
+            kripke_components,
+            shape,
+            domain_lb,
+            domain_ub,
+            horizon=4,
+            num_samples=64,
+            batch_size=256,
+            refine=False,
+            verbose=False,
+        )
+    print(f"    > Epsilon = {result.epsilon}")
+    print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Median epsilon = {result.epsilon_median}")
+    print(f"    > Q3 epsilon = {result.epsilon_q3}")
+
+    result = usa.evaluate_simulation_metric(
+            params,
+            kripke_components,
+            shape,
+            domain_lb,
+            domain_ub,
+            horizon=5,
+            num_samples=64,
+            batch_size=256,
+            refine=False,
+            verbose=False,
+        )
+    print(f"    > Epsilon = {result.epsilon}")
+    print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Median epsilon = {result.epsilon_median}")
+    print(f"    > Q3 epsilon = {result.epsilon_q3}")
+
