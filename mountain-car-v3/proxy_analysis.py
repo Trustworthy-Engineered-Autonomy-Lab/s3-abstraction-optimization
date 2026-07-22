@@ -157,6 +157,15 @@ def spearman_stat(x, y, axis=-1):
 def mean_stat(x, axis=-1):
     return np.mean(x, axis=axis)
 
+
+def mean_error_stat(x, y, axis=-1):
+    return np.mean(x - y, axis=axis)
+
+
+def mean_abs_error_stat(x, y, axis=-1):
+    return np.mean(np.abs(x - y), axis=axis)
+
+
 def bootstrap_mn(x):
 
     rng = np.random.default_rng(12345)
@@ -224,6 +233,128 @@ def bootstrap_corr(x, y):
     return pearson_r, pearson_diff, pearson_ci, spearman_r, spearman_diff, spearman_ci
 
 
+def bootstrap_errors(x, y):
+    rng = np.random.default_rng(12345)
+
+    # Build bootstrap intervals for mean error
+    mean_error = mean_error_stat(x, y)
+    res_error = stats.bootstrap(
+        (x, y),
+        mean_error_stat,
+        paired=True,
+        vectorized=True,
+        method="BCa",
+        confidence_level=0.95,
+        n_resamples=20_000,
+        rng=rng,
+    )
+    ci_error = np.array([
+        res_error.confidence_interval.low,
+        res_error.confidence_interval.high,
+    ])
+    diff_error = ci_error - mean_error
+
+    # Build bootstrap intervals for mean absolute error
+    mean_abs_error = mean_abs_error_stat(x, y)
+    res_abs_error = stats.bootstrap(
+        (x, y),
+        mean_abs_error_stat,
+        paired=True,
+        vectorized=True,
+        method="BCa",
+        confidence_level=0.95,
+        n_resamples=20_000,
+        rng=rng,
+    )
+    ci_abs_error = np.array([
+        res_abs_error.confidence_interval.low,
+        res_abs_error.confidence_interval.high,
+    ])
+    diff_abs_error = ci_abs_error - mean_abs_error
+
+    return (
+        mean_error,
+        diff_error,
+        ci_error,
+        mean_abs_error,
+        diff_abs_error,
+        ci_abs_error,
+    )
+
+
+def format_estimate(value, diff, *, unit=""):
+    """Format an estimate followed by its lower and upper 95% CI offsets."""
+    suffix = f" {unit}" if unit else ""
+    return f"{value:.3f} {diff[1]:+.3f}/{diff[0]:+.3f}{suffix}"
+
+
+def print_report(data):
+    proxies = data["proxies"]
+    max_epsilons = data["max_epsilons"]
+    mean_epsilons = data["mean_epsilons"]
+    transitions = data["transitions"]
+    proxy_times = data["proxy_times"]
+    sim_times = data["sim_times"]
+
+    for i in range(proxies.shape[0]):
+        correlations = (
+            ("Proxy vs. max epsilon", max_epsilons[i]),
+            ("Proxy vs. mean epsilon", mean_epsilons[i]),
+            ("Proxy vs. transitions", transitions[i]),
+        )
+        errors = (
+            ("Max epsilon", max_epsilons[i]),
+            ("Mean epsilon", mean_epsilons[i]),
+        )
+
+        print(f"\nHorizon {i + 1}")
+        print("  Correlations")
+        print(
+            f"    {'Comparison':<26} {'Pearson r (95%)':>29} "
+            f"{'Spearman r (95%)':>31}"
+        )
+        print(f"    {'-' * 26} {'-' * 29} {'-' * 31}")
+        for metric_name, values in correlations:
+            pearson, pearson_diff, _, spearman, spearman_diff, _ = bootstrap_corr(
+                proxies[i], values
+            )
+            print(
+                f"    {metric_name:<26} "
+                f"{format_estimate(pearson, pearson_diff):>29} "
+                f"{format_estimate(spearman, spearman_diff):>31}"
+            )
+
+        print("\n  Errors (proxy - target)")
+        print(
+            f"    {'Target':<26} {'Mean error (95%)':>29} "
+            f"{'Mean abs. error (95%)':>35}"
+        )
+        print(f"    {'-' * 26} {'-' * 29} {'-' * 35}")
+        for target_name, target_values in errors:
+            mean_error, error_diff, _, mean_abs_error, abs_error_diff, _ = bootstrap_errors(
+                proxies[i], target_values
+            )
+            print(
+                f"    {target_name:<26} "
+                f"{format_estimate(mean_error, error_diff):>29} "
+                f"{format_estimate(mean_abs_error, abs_error_diff):>35}"
+            )
+
+        proxy_time, proxy_time_diff, _ = bootstrap_mn(proxy_times[i])
+        sim_time, sim_time_diff, _ = bootstrap_mn(sim_times[i])
+        print("\n  Latency")
+        print(f"    {'Process':<26} {'Mean time (95%)':>29}")
+        print(f"    {'-' * 26} {'-' * 29}")
+        print(
+            f"    {'Proxy evaluation':<26} "
+            f"{format_estimate(proxy_time, proxy_time_diff, unit='s'):>29}"
+        )
+        print(
+            f"    {'Simulation evaluation':<26} "
+            f"{format_estimate(sim_time, sim_time_diff, unit='s'):>29}"
+        )
+
+
 def mixture_ci(x, y):
 
     rng = np.random.default_rng(12345)
@@ -266,86 +397,9 @@ if __name__ == "__main__":
 
     fname = case_study_dir / "proxy_analysis_data.pkl"
 
-    collect_data(fname)
+    # collect_data(fname)
 
     with open(fname, "rb") as f:
         data = pkl.load(f)
-    
-    proxies = data["proxies"]
-    max_epsilons = data["max_epsilons"]
-    mean_epsilons = data["mean_epsilons"]
-    transitions = data["transitions"]
-    proxy_times = data["proxy_times"]
-    sim_times = data["sim_times"]
 
-    num_rows = proxies.shape[0]
-
-    for i in range(num_rows):
-        correlations = (
-            ("Max epsilon vs. proxy", max_epsilons[i, :]),
-            ("Mean epsilon vs. proxy", mean_epsilons[i, :]),
-            ("Transitions vs. proxy", transitions[i, :]),
-        )
-
-        print(f"\nHorizon {i + 1}")
-        print(f"  {'Metric':<24} {'Pearson r (95% CI)':>24} {'Spearman r (95% CI)':>24}")
-        print(f"  {'-' * 24} {'-' * 24} {'-' * 24}")
-        for metric_name, values in correlations:
-            pearson_corr, pearson_diff, _, spearman_corr, spearman_diff, _ = bootstrap_corr(
-                values, proxies[i, :]
-            )
-            pearson_ci = f"{pearson_corr:.2f} {pearson_diff[1]:+.2f}/{pearson_diff[0]:+.2f}"
-            spearman_ci = f"{spearman_corr:.2f} {spearman_diff[1]:+.2f}/{spearman_diff[0]:+.2f}"
-            print(f"  {metric_name:<24} {pearson_ci:>24} {spearman_ci:>24}")
-
-        proxy_time, proxy_diff, _ = bootstrap_mn(proxy_times[i, :])
-        sim_time, sim_diff, _ = bootstrap_mn(sim_times[i, :])
-        print(f"  Average proxy time (95% CI): {proxy_time:.2f} s {proxy_diff[1]:+.2f}/{proxy_diff[0]:+.2f}")
-        print(f"  Average simulation time (95% CI): {sim_time:.2f} s {sim_diff[1]:+.2f}/{sim_diff[0]:+.2f}")
-
-
-
-    # sim_time, diff, ci = bootstrap_mn(sim_times[0, :])
-    # print(sim_time)
-    # print(diff)
-
-    # pr, pd, pci, sr, sd, sci = bootstrap_corr(proxies[0, :], mean_epsilons[0, :])
-    # print(pr)
-    # print(pd)
-    # print(sr)
-    # print(sd)
-
-    # proxies = np.array(data['proxies'])
-    # epsilons = np.array(data['epsilons'])
-    # mean_epsilons = np.array(data['mean_epsilons'])
-
-    # pearson_corr, p_value_p = stats.pearsonr(epsilons, proxies)
-    # print(f"Pearson r: {pearson_corr:.3f}, p-value: {p_value_p:.3f}")
-
-    # spearman_corr, p_value_s = stats.spearmanr(epsilons, proxies)
-    # print(f"Spearman r: {spearman_corr:.3f}, p-value: {p_value_s:.3f}")
-
-    # pearson_corr, p_value_p = stats.pearsonr(mean_epsilons, proxies)
-    # print(f"Mean-epsilon Pearson r: {pearson_corr:.3f}, p-value: {p_value_p:.3f}")
-
-    # spearman_corr, p_value_s = stats.spearmanr(mean_epsilons, proxies)
-    # print(f"Mean-epsilon Spearman r: {spearman_corr:.3f}, p-value: {p_value_s:.3f}")
-
-    # plt.plot(keys, proxies, label="proxy")
-    # plt.plot(keys, epsilons, label="epsilon")
-    # plt.plot(keys, mean_epsilons, label="mean_epsilon")
-    # plt.xlabel("random test")
-    # plt.ylabel("value")
-    # plt.legend()
-    # plt.show()
-
-    # plt.scatter(proxies, epsilons)
-    # plt.xlabel("proxy")
-    # plt.ylabel("epsilon")
-    # plt.show()
-
-    # plt.scatter(proxies, mean_epsilons)
-    # plt.xlabel("proxy")
-    # plt.ylabel("mean epsilon")
-    # plt.show()
-
+    print_report(data)
