@@ -12,6 +12,7 @@ import numpy as np
 import pyModelChecking as pmc
 import pickle as pkl
 import matplotlib.pyplot as plt
+from pathlib import Path
 import mountain_car_abstraction as mca
 import verification_tools as vt
 import mountain_car_objectives as mco
@@ -25,10 +26,10 @@ import mountain_car_simulation_analysis as mcsa
 
 if __name__ == "__main__":
 
-    gt_reach_fname = "mountain-car-v3/mc_reach_regions.pkl"
+    gt_reach_fname = Path(__file__).with_name("mc_reach_regions.pkl")
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [50, 50]
+    abstraction_shape = [70, 70]
     domain_lb = np.array([-1.2, -0.07])
     domain_ub = np.array([0.6, 0.07])
 
@@ -38,22 +39,27 @@ if __name__ == "__main__":
 
     # Initialize abstraction parameters
     key = jax.random.PRNGKey(0)
-    sigma_u = 2.0
-    u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
-    u2 = jnp.zeros((abstraction_shape[1],))
-    # key, k_u1, k_u2 = jax.random.split(key, 3)
-    # u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
-    # u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
+    sigma_u = 0.1
+    # u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
+    # u2 = jnp.zeros((abstraction_shape[1],))
+    key, k_u1, k_u2 = jax.random.split(key, 3)
+    u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
+    u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
     params = jnp.concatenate([u1, u2])
 
     args = {}
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
-    args['horizon'] = 10
-    args['temp_in'] = 0.1
-    args['temp_out'] = 1.0
-    args['inflation_coefs'] = [0.018, 0.0014]
+    args['horizon'] = 5
+    args['temp_in'] = 0.01
+    args['temp_out'] = 0.03
+    args['norm_order'] = 2.0
+    args['propagation'] = 'interval'
+    args['inflation_coefs'] = np.zeros(2)
+    args['snap_temperatures'] = (
+        (domain_ub - domain_lb) / (2.0 * np.asarray(abstraction_shape))
+    )
 
     # Evaluate initial abstraction
     recall, kripke_components = vt.build_and_verify_from_params(params,
@@ -99,10 +105,11 @@ if __name__ == "__main__":
         mco.upward_proxy,
         args=args,
         steps=500,
-        lr=5,
-        grad_clip=1e3,
-        print_every=1,
-        record_every=100)
+        lr=0.02,
+        grad_clip=1.0,
+        print_every=10,
+        record_every=10,
+        return_best=True)
 
     # Evaluate final abstraction
     recall, kripke_components = vt.build_and_verify_from_params(params_opt,

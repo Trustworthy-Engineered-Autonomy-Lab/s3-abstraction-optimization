@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [80, 80, 20]
+    abstraction_shape = [50, 50, 50]
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
 
@@ -39,14 +39,14 @@ if __name__ == "__main__":
 
     # Initialize abstraction parameters
     key = jax.random.PRNGKey(0)
-    sigma_u = 1.0
-    u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
-    u2 = jnp.zeros((abstraction_shape[1],))
-    u3 = jnp.zeros((abstraction_shape[2],))
-    # key, k_u1, k_u2 = jax.random.split(key, 3)
-    # u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
-    # u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
-    # u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
+    sigma_u = 0.1
+    # u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
+    # u2 = jnp.zeros((abstraction_shape[1],))
+    # u3 = jnp.zeros((abstraction_shape[2],))
+    key, k_u1, k_u2 = jax.random.split(key, 3)
+    u1 = sigma_u * jax.random.normal(k_u1, (abstraction_shape[0],))
+    u2 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[1],))
+    u3 = sigma_u * jax.random.normal(k_u2, (abstraction_shape[2],))
     params = jnp.concatenate([u1, u2, u3])
 
     args = {}
@@ -54,10 +54,9 @@ if __name__ == "__main__":
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
     args['horizon'] = 3
-    # args['temp'] = 1.0
-    args['temp_in'] = 0.1
-    args['temp_out'] = 0.1
-    args['inflation_coefs'] = np.array([0.3, 0.3, 0.1])
+    args['temp_in'] = 1.0
+    args['temp_out'] = 1.0
+    args['inflation_coefs'] = np.array([0.5, 0.5, 0.05])
     args['beta'] = 0.4
 
     # val, grad = jax.value_and_grad(uo.conservatism_cost_fast)(
@@ -109,7 +108,7 @@ if __name__ == "__main__":
     #     abstraction_shape,
     #     domain_lb,
     #     domain_ub,
-    #     horizon=3,
+    #     horizon=args['horizon'],
     #     num_samples=64,
     #     batch_size=256,
     #     refine=False,
@@ -117,6 +116,7 @@ if __name__ == "__main__":
     # )
     # print(f"    > Epsilon = {result.epsilon}")
     # print(f"    > Mean epsilon = {result.epsilon_mean}")
+    # print(f"    > Q1 epsilon = {result.epsilon_q1}")
     # print(f"    > Median epsilon = {result.epsilon_median}")
     # print(f"    > Q3 epsilon = {result.epsilon_q3}")
 
@@ -171,7 +171,7 @@ if __name__ == "__main__":
         params,
         uo.upward_proxy,
         args=args,
-        steps=10,
+        steps=100,
         lr=0.5,
         grad_clip=100,
         print_every=1,
@@ -194,7 +194,7 @@ if __name__ == "__main__":
         abstraction_shape,
         domain_lb,
         domain_ub,
-        horizon=3,
+        horizon=args['horizon'],
         num_samples=64,
         batch_size=256,
         refine=False,
@@ -202,6 +202,7 @@ if __name__ == "__main__":
     )
     print(f"    > Epsilon = {result.epsilon}")
     print(f"    > Mean epsilon = {result.epsilon_mean}")
+    print(f"    > Q1 epsilon = {result.epsilon_q1}")
     print(f"    > Median epsilon = {result.epsilon_median}")
     print(f"    > Q3 epsilon = {result.epsilon_q3}")
 

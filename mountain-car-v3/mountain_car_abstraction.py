@@ -30,12 +30,8 @@ def build_abstraction(
         approximate_hessian_resolution = 3,
     ):
     """
-    Casts the synthetic closed-loop system as a finite-state transition
-    system (Kripke structure). Successor cells (abstract states) are
-    By default, Hessians are estimated in relaxed mode: physical domain faces
-    are moved slightly inward, and cells crossing a ReLU or plant switching
-    surface use sampled analytic Hessians. Set ``strict_derivatives=True`` to
-    require a certified smooth-cell interval Hessian instead.
+    Cast the closed-loop Mountain Car system as a finite-state transition
+    system. 
     """
 
     # Extract model size details
@@ -71,29 +67,43 @@ def build_abstraction(
             else:
                 label = ['safe']
 
-            # Compute cell centroid and evaluate Jacobian there; compute post-image AABB
-            centroid = (lower_bounds + upper_bounds) / 2.0
-            J = mcs.jacobian(centroid)
-            f_center = mcs.cl_system_numeric(centroid)
-            linearized_next_verts = np.array([
-                mcs.linear_cl_system(vert, centroid, J=J, f_center=f_center)
-                for vert in all_verts
-            ])
-            next_lower_bounds = linearized_next_verts.min(axis=0)
-            next_upper_bounds = linearized_next_verts.max(axis=0)
-
-            # Compute Taylor remainder
-            R_lo, R_hi = mcs.taylor_remainder(
+            interval_lower, interval_upper = mcs.interval_cl_system(
                 lower_bounds,
                 upper_bounds,
-                strict=strict_derivatives,
-                boundary_inset=derivative_boundary_inset,
-                approximate_resolution=approximate_hessian_resolution,
             )
-
-            # Inflate AABB by Taylor remainder
-            next_lower_bounds += R_lo
-            next_upper_bounds += R_hi
+            try:
+                centroid = (lower_bounds + upper_bounds) / 2.0
+                J = mcs.jacobian(centroid)
+                f_center = mcs.cl_system_numeric(centroid)
+                linearized_next_verts = np.array([
+                    mcs.linear_cl_system(
+                        vert,
+                        centroid,
+                        J=J,
+                        f_center=f_center,
+                    )
+                    for vert in all_verts
+                ])
+                next_lower_bounds = linearized_next_verts.min(axis=0)
+                next_upper_bounds = linearized_next_verts.max(axis=0)
+                R_lo, R_hi = mcs.taylor_remainder(
+                    lower_bounds,
+                    upper_bounds,
+                    strict=True,
+                )
+            except mcs.DerivativeDomainError:
+                if strict_derivatives:
+                    raise
+                next_lower_bounds = interval_lower
+                next_upper_bounds = interval_upper
+            else:
+                taylor_lower = next_lower_bounds + R_lo
+                taylor_upper = next_upper_bounds + R_hi
+                next_lower_bounds = np.maximum(taylor_lower, interval_lower)
+                next_upper_bounds = np.minimum(taylor_upper, interval_upper)
+                if np.any(next_lower_bounds > next_upper_bounds):
+                    next_lower_bounds = interval_lower
+                    next_upper_bounds = interval_upper
 
             # Identify successor cells
             x_min = next_lower_bounds[0]

@@ -20,6 +20,7 @@ from array import array
 from dataclasses import dataclass
 from itertools import product
 from typing import Callable, Hashable, Iterable, Mapping
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -914,7 +915,7 @@ if __name__ == "__main__":
     import jax.numpy as jnp
     import verification_tools as vt
 
-    gt_reach_fname = "mountain-car-v3/mc_reach_regions.pkl"
+    gt_reach_fname = Path(__file__).with_name("mc_reach_regions.pkl")
     abstraction_shape = [100, 100]
     domain_lb = np.array([-1.2, -0.07])
     domain_ub = np.array([0.6, 0.07])
