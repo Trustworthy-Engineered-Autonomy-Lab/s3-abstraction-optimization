@@ -1,6 +1,7 @@
 #Extracting relevant data from proxy run
 import csv
 from scipy import stats
+import numpy as np
 
 def extract_data_from_csv(file_path):
     #horizon, key, proxy, epsilon, mean_epsilon, min_epsilon, median_epsilon, q1_epsilon, q3_epsilon, proxy_time, simulate_time
@@ -27,6 +28,12 @@ def calculate_pearson_spearman(eps, prox):
 
     return pearson_corr, spearman_corr
 
+def calculate_RMSE(eps, prox):
+    #sqrt(1/n(np.array(eps) - np.array(prox))**2)
+    rmse = np.sqrt(np.mean((np.array(prox) - np.array(eps))**2))
+    return rmse
+
+
 
 if __name__ == "__main__":
     #iterate thru file paths.
@@ -38,11 +45,16 @@ if __name__ == "__main__":
         h_end = int(rows[-1][0]) # get last horizon
         for horizon in range(h_start, h_end+1):
             proxy, eps, mean_eps = extract_data_by_horizon(rows, horizon)
-            pearson_corr, spearman_corr = calculate_pearson_spearman(mean_eps, proxy)
-            pearson_corrs.append(pearson_corr)
-            spearman_corrs.append(spearman_corr)
 
-            print(f"Horizon {horizon}: Pearson r: {pearson_corr:.3f}, Spearman r: {spearman_corr:.3f}")
+            rmse_worst_case = calculate_RMSE(eps, proxy)
+            rmse_avg = calculate_RMSE(mean_eps, proxy)
+            print(f"Horizon {horizon}: RMSE worst case: {rmse_worst_case:.3f}, RMSE average: {rmse_avg:.3f}")
+
+            # pearson_corr, spearman_corr = calculate_pearson_spearman(mean_eps, proxy)
+            # pearson_corrs.append(pearson_corr)
+            # spearman_corrs.append(spearman_corr)
+
+            # print(f"Horizon {horizon}: Pearson r: {pearson_corr:.3f}, Spearman r: {spearman_corr:.3f}")
             # print(f"Horizon {horizon}:")
             # print(proxy, "\n", eps, "\n", mean_eps)
 
