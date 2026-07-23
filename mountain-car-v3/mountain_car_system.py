@@ -322,6 +322,18 @@ def cl_system_jax(state) -> jnp.ndarray:
     return ol_system_jax(x, controller_action_jax(x))
 
 
+def jacobian_jax(state) -> jnp.ndarray:
+    """Differentiate the JAX closed loop with respect to one state."""
+
+    x = _validate_state_shape_jax(state)
+    if x.ndim != 1:
+        raise ValueError(
+            "jacobian_jax expects one state with shape (2,); "
+            "use jax.vmap(jacobian_jax) for a batch."
+        )
+    return jax.jacfwd(cl_system_jax)(x)
+
+
 def cl_system(state: np.ndarray) -> np.ndarray:
     """Closed-loop MountainCar transition (fast NumPy implementation)."""
 
@@ -1123,6 +1135,44 @@ def taylor_remainder(
 
     return remainder_lower, remainder_upper
 
+
+# =====================================================================
+# Approximate the Lipschitz array
+# =====================================================================
+
+def lipschitz_array(
+    domain_lb,
+    domain_ub,
+    points_per_dim=41,
+    batch_size=8192
+):
+    """
+    Grid estimate of the componentwise Lipschitz array
+    """
+    domain_lb = np.asarray(domain_lb, dtype=float)
+    domain_ub = np.asarray(domain_ub, dtype=float)
+
+    axes = [
+        np.linspace(domain_lb[i], domain_ub[i], points_per_dim)
+        for i in range(2)
+    ]
+
+    mesh = np.meshgrid(*axes, indexing="ij")
+    states = np.stack(mesh, axis=-1).reshape(-1, 2)
+
+    batched_jacobian = jax.jit(jax.vmap(jacobian_jax))
+
+    L = np.zeros((2, 2), dtype=float)
+
+    for start in range(0, len(states), batch_size):
+        state_batch = jnp.asarray(states[start:start + batch_size])
+
+        J = np.asarray(batched_jacobian(state_batch))
+
+        L_batch = np.max(np.abs(J), axis=0)
+        L = np.maximum(L, L_batch)
+
+    return L
 
 if __name__ == "__main__":
 

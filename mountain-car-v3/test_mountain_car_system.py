@@ -153,9 +153,32 @@ class MountainCarDerivativeTests(unittest.TestCase):
 
     def test_jax_state_jacobian_matches_cached_analytic_jacobian(self) -> None:
         state = jnp.asarray(self.state, dtype=jnp.float32)
-        jax_jacobian = jax.jacfwd(system.cl_system_jax)(state)
+        jax_jacobian = system.jacobian_jax(state)
         expected = system.jacobian(self.state)
         np.testing.assert_allclose(jax_jacobian, expected, atol=2e-6, rtol=2e-6)
+
+    def test_lipschitz_array_matches_direct_jax_grid_maximum(self) -> None:
+        lower = np.array([-0.6, -0.02])
+        upper = np.array([-0.3, 0.02])
+        points_per_dim = 5
+
+        actual = system.lipschitz_array(
+            lower,
+            upper,
+            points_per_dim=points_per_dim,
+            batch_size=7,
+        )
+
+        axes = [
+            np.linspace(lower[index], upper[index], points_per_dim)
+            for index in range(2)
+        ]
+        states = jnp.asarray(
+            np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape((-1, 2))
+        )
+        all_jacobians = jax.vmap(system.jacobian_jax)(states)
+        expected = np.asarray(jnp.max(jnp.abs(all_jacobians), axis=0))
+        np.testing.assert_allclose(actual, expected, atol=1e-7, rtol=1e-7)
 
     def test_image_area_has_jittable_abstraction_parameter_gradient(self) -> None:
         # Import here to keep the system tests usable independently of the
