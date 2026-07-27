@@ -18,6 +18,7 @@ import math
 from pathlib import Path
 import warnings
 
+import matplotlib.pyplot as plt
 import numpy as np
 from huggingface_hub import hf_hub_download
 
@@ -1176,8 +1177,43 @@ def lipschitz_array(
 
 if __name__ == "__main__":
 
-    sample_state = np.array([-0.4, 0.0])
-    print("state:", sample_state)
-    print("next state:", cl_system_numeric(sample_state))
-    print("Jacobian:\n", jacobian(sample_state))
-    print("Hessian:\n", hessian(sample_state))
+    domain_lb = np.array([-1.2, -0.07])
+    domain_ub = np.array([0.6, 0.07])
+    goal_position = 0.45
+    position_values = np.linspace(domain_lb[0], domain_ub[0], 25)
+    velocity_values = np.linspace(domain_lb[1], domain_ub[1], 17)
+    grid_position, grid_velocity = np.meshgrid(position_values, velocity_values)
+
+    states = np.column_stack([grid_position.ravel(), grid_velocity.ravel()])
+    next_states = np.stack([cl_system(state) for state in states])
+    displacement = next_states - states
+
+    fig, axis = plt.subplots(figsize=(8, 5), constrained_layout=True)
+    axis.axvspan(
+        goal_position,
+        MAX_POSITION,
+        facecolor="#2a9d8f",
+        alpha=0.25,
+        label=r"Goal: $x_1 \geq 0.45$",
+        zorder=1,
+    )
+    axis.quiver(
+        grid_position,
+        grid_velocity,
+        displacement[:, 0].reshape(grid_position.shape),
+        displacement[:, 1].reshape(grid_velocity.shape),
+        color="#264653",
+        angles="xy",
+        scale_units="xy",
+        scale=0.5,
+        width=0.003,
+        headwidth=4,
+        headlength=5,
+        zorder=2,
+    )
+    axis.set_xlabel(r"$x_1$ (position)")
+    axis.set_ylabel(r"$x_2$ (velocity)")
+    axis.set_xlim(domain_lb[0], domain_ub[0])
+    axis.set_ylim(domain_lb[1], domain_ub[1])
+    # axis.legend(loc="upper left", frameon=True)
+    plt.show()

@@ -72,11 +72,6 @@ class MountainCarDerivativeTests(unittest.TestCase):
         for state in states:
             sb3_action, _ = system.CONTROLLER.predict(state, deterministic=True)
             sb3_scalar = float(np.asarray(sb3_action).reshape(-1)[0])
-            # The derivative path evaluates the stored float32 parameters as a
-            # smooth float64 function.  SB3 performs its reductions in
-            # float32, so a few ulps accumulate through the 400/300-wide
-            # layers.  The resulting transition difference is smaller by the
-            # plant's POWER factor (0.0015).
             self.assertAlmostEqual(
                 system.controller_action(state), sb3_scalar, delta=3e-5
             )

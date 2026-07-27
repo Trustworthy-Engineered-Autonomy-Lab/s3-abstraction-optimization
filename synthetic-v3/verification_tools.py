@@ -159,13 +159,13 @@ def get_gt_reach_regions(domain_lb, domain_ub, grid_resolution=101, verbose=Fals
             reached_terminal = False
             for _ in range(max_steps):
 
+                if sa.is_oob_state(verts, x_bounds=(x1_min, x1_max), y_bounds=(x2_min, x2_max)):
+                                    gt_reach_regions[(i, j)] = 'fail'
+                                    reached_terminal = True
+                                    break
+
                 if sa.is_goal_state(verts):
                     gt_reach_regions[(i, j)] = 'goal'
-                    reached_terminal = True
-                    break
-
-                if sa.is_oob_state(verts, x_bounds=(x1_min, x1_max), y_bounds=(x2_min, x2_max)):
-                    gt_reach_regions[(i, j)] = 'fail'
                     reached_terminal = True
                     break
 

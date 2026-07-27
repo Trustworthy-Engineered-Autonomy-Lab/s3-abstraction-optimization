@@ -9,6 +9,7 @@
 import numpy as np
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 from itertools import product
 
 
@@ -363,3 +364,84 @@ def lagrange_error_bounds(
 def wrap_to_pi_jax(angle):
     angle = jnp.asarray(angle)
     return (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi
+
+
+# =====================================================================
+# Main
+# =====================================================================
+
+if __name__ == "__main__":
+
+    domain_lb = np.array([0.0, 0.0, -np.pi])
+    domain_ub = np.array([50.0, 50.0, np.pi])
+
+    goal_radius = 8.0
+    theta = 0.0
+    x_values = np.linspace(domain_lb[0], domain_ub[0], 17)
+    y_values = np.linspace(domain_lb[1], domain_ub[1], 17)
+    grid_x, grid_y = np.meshgrid(x_values, y_values)
+
+    positions = np.column_stack([grid_x.ravel(), grid_y.ravel()])
+    goal_vector = K_GOAL * (np.asarray(GOAL_CENTER) - positions)
+    obstacle_vector = positions - np.asarray(OBS_CENTER)
+    obstacle_distance = np.sqrt(
+        np.sum(obstacle_vector**2, axis=-1) + CONTROLLER_EPS
+    )
+    obstacle_clearance = obstacle_distance - OBS_RADIUS
+    repulsion = (
+        K_REP
+        * np.exp(-ALPHA * obstacle_clearance)[:, None]
+        * obstacle_vector
+        / (obstacle_distance[:, None]**3 + CONTROLLER_EPS)
+    )
+    guidance = goal_vector + repulsion
+    guidance /= np.maximum(np.linalg.norm(guidance, axis=-1, keepdims=True), CONTROLLER_EPS)
+
+    fig, axis = plt.subplots(figsize=(8, 5), constrained_layout=True)
+    axis.quiver(
+        grid_x,
+        grid_y,
+        guidance[:, 0].reshape(grid_x.shape),
+        guidance[:, 1].reshape(grid_y.shape),
+        color="#264653",
+        angles="xy",
+        scale_units="xy",
+        scale=0.45,
+        width=0.003,
+        headwidth=4,
+        headlength=5,
+        zorder=2,
+    )
+    obstacle_handle = plt.Circle(
+        OBS_CENTER,
+        OBS_RADIUS,
+        facecolor="#e76f51",
+        edgecolor="#9b2226",
+        linewidth=1.5,
+        alpha=0.6,
+        label="Obstacle",
+        zorder=3,
+    )
+    goal_handle = plt.Circle(
+        GOAL_CENTER,
+        goal_radius,
+        facecolor="#2a9d8f",
+        edgecolor="#1d6f66",
+        linewidth=1.5,
+        alpha=0.35,
+        label="Goal",
+        zorder=3,
+    )
+    axis.add_patch(obstacle_handle)
+    axis.add_patch(goal_handle)
+    # axis.set_title(rf"Closed-Loop Unicycle Guidance Field ($\theta = {theta:.0f}$)")
+    axis.set_xlabel("$x_1$")
+    axis.set_ylabel("$x_2$")
+    axis.set_aspect("equal", adjustable="box")
+    axis.set_xlim(domain_lb[0], domain_ub[0])
+    axis.set_ylim(domain_lb[1], domain_ub[1])
+    # axis.grid(alpha=0.2, linewidth=0.7)
+    # axis.legend(loc="upper left", frameon=True)
+    plt.show()
+
+    

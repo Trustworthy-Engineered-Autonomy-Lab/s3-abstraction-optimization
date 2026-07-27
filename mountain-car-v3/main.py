@@ -29,7 +29,7 @@ if __name__ == "__main__":
     gt_reach_fname = Path(__file__).with_name("mc_reach_regions.pkl")
 
     # Fixed abstraction and environment settings
-    abstraction_shape = [200, 200]
+    abstraction_shape = [100, 100]
     domain_lb = np.array([-1.2, -0.07])
     domain_ub = np.array([0.6, 0.07])
 
@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
     # Initialize abstraction parameters
     key = jax.random.PRNGKey(0)
-    sigma_u = 0.1
+    sigma_u = 0.3
     # u1 = jnp.zeros((abstraction_shape[0],))  # initial uniform spacing
     # u2 = jnp.zeros((abstraction_shape[1],))
     key, k_u1, k_u2 = jax.random.split(key, 3)
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     args['temp_out'] = 0.1
     args['norm_order'] = 2.0
     args['propagation'] = 'interval'
-    args['inflation_coefs'] = np.array([0.0004, 0.00003])
+    args['inflation_coefs'] = np.array([0.009, 0.0007])
     args['snap_temperatures'] = (
         (domain_ub - domain_lb) / (2.0 * np.asarray(abstraction_shape))
     )

@@ -48,7 +48,7 @@ def collect_data(fname):
     args['domain_ub'] = domain_ub
     args['temp_in'] = 1.0
     args['temp_out'] = 1.0
-    args['inflation_coefs'] = np.array([0.5, 0.5, 0.05])
+    args['inflation_coefs'] = np.array([1.25, 1.25, 0.16])
 
     horizons = [1, 2, 3, 4, 5]
 
@@ -65,6 +65,9 @@ def collect_data(fname):
     proxies = np.zeros((len(horizons), num_samples), dtype=float)
     max_epsilons = np.zeros((len(horizons), num_samples), dtype=float)
     mean_epsilons = np.zeros((len(horizons), num_samples), dtype=float)
+    median_epsilons = np.zeros((len(horizons), num_samples), dtype=float)
+    q1_epsilons = np.zeros((len(horizons), num_samples), dtype=float)
+    q3_epsilons = np.zeros((len(horizons), num_samples), dtype=float)
     transitions = np.zeros((len(horizons), num_samples), dtype=float)
     proxy_times = np.zeros((len(horizons), num_samples), dtype=float)
     sim_times = np.zeros((len(horizons), num_samples), dtype=float)
@@ -115,6 +118,9 @@ def collect_data(fname):
             proxies[j, i] = J
             max_epsilons[j, i] = result.epsilon
             mean_epsilons[j, i] = result.epsilon_mean
+            median_epsilons[j, i] = result.epsilon_median
+            q1_epsilons[j, i] = result.epsilon_q1
+            q3_epsilons[j, i] = result.epsilon_q3
             transitions[j, i] = avg_transitions
             proxy_times[j, i] = proxy_eval_time
             sim_times[j, i] = sim_eval_time
@@ -125,6 +131,9 @@ def collect_data(fname):
                 "proxies": proxies,
                 "max_epsilons": max_epsilons,
                 "mean_epsilons": mean_epsilons,
+                "median_epsilons": median_epsilons,
+                "q1_epsilons": q1_epsilons,
+                "q3_epsilons": q3_epsilons,
                 "transitions": transitions,
                 "proxy_times": proxy_times,
                 "sim_times": sim_times
@@ -287,6 +296,9 @@ def print_report(data):
     proxies = data["proxies"]
     max_epsilons = data["max_epsilons"]
     mean_epsilons = data["mean_epsilons"]
+    median_epsilons = data["median_epsilons"]
+    q1_epsilons = data["q1_epsilons"]
+    q3_epsilons = data["q3_epsilons"]
     transitions = data["transitions"]
     proxy_times = data["proxy_times"]
     sim_times = data["sim_times"]
@@ -295,6 +307,9 @@ def print_report(data):
         correlations = (
             ("Proxy vs. max epsilon", max_epsilons[i]),
             ("Proxy vs. mean epsilon", mean_epsilons[i]),
+            ("Proxy vs. median epsilon", median_epsilons[i]),
+            ("Proxy vs. Q1 epsilon", q1_epsilons[i]),
+            ("Proxy vs. Q3 epsilon", q3_epsilons[i]),
             ("Proxy vs. transitions", transitions[i]),
         )
         errors = (
@@ -357,16 +372,12 @@ if __name__ == "__main__":
 
     case_study_dir = Path(__file__).resolve().parent
 
-    fname = case_study_dir / "proxy_analysis_data.pkl"
+    fname = case_study_dir / "proxy_analysis_data_10.pkl"
 
     # collect_data(fname)
 
     with open(fname, "rb") as f:
         data = pkl.load(f)
-
-    # max_epsilons = data["max_epsilons"]
-    # proxies = data["proxies"]
-
 
     print_report(data)
 

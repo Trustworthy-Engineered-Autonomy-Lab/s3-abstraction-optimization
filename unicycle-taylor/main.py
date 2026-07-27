@@ -53,7 +53,7 @@ if __name__ == "__main__":
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
-    args['horizon'] = 3
+    args['horizon'] = 5
     args['temp_in'] = 1.0
     args['temp_out'] = 1.0
     args['inflation_coefs'] = np.array([0.5, 0.5, 0.05])
@@ -166,45 +166,45 @@ if __name__ == "__main__":
     #     print_every=5,
     #     record_every=100)
 
-    # Employ gradient descent to optimize the grid
-    params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
-        params,
-        uo.upward_proxy,
-        args=args,
-        steps=100,
-        lr=0.5,
-        grad_clip=100,
-        print_every=1,
-        record_every=100)
+    # # Employ gradient descent to optimize the grid
+    # params_opt, cost_history, grad_norm_history = u_opt.gradient_descent(
+    #     params,
+    #     uo.upward_proxy,
+    #     args=args,
+    #     steps=100,
+    #     lr=0.5,
+    #     grad_clip=100,
+    #     print_every=1,
+    #     record_every=100)
     
-    # Evaluate the final system
-    recall, kripke_components = vt.build_and_verify_from_params(params_opt,
-                                               abstraction_shape,
-                                               domain_lb,
-                                               domain_ub,
-                                               init_domain_lb,
-                                               init_domain_ub,
-                                               gt_reach_fname=gt_reach_fname,
-                                               verbose=True,
-                                               log_time=True)
-    print(f"    > Recall = {recall}")
-    result = usa.evaluate_simulation_metric(
-        params_opt,
-        kripke_components,
-        abstraction_shape,
-        domain_lb,
-        domain_ub,
-        horizon=args['horizon'],
-        num_samples=64,
-        batch_size=256,
-        refine=False,
-        verbose=False,
-    )
-    print(f"    > Epsilon = {result.epsilon}")
-    print(f"    > Mean epsilon = {result.epsilon_mean}")
-    print(f"    > Q1 epsilon = {result.epsilon_q1}")
-    print(f"    > Median epsilon = {result.epsilon_median}")
-    print(f"    > Q3 epsilon = {result.epsilon_q3}")
+    # # Evaluate the final system
+    # recall, kripke_components = vt.build_and_verify_from_params(params_opt,
+    #                                            abstraction_shape,
+    #                                            domain_lb,
+    #                                            domain_ub,
+    #                                            init_domain_lb,
+    #                                            init_domain_ub,
+    #                                            gt_reach_fname=gt_reach_fname,
+    #                                            verbose=True,
+    #                                            log_time=True)
+    # print(f"    > Recall = {recall}")
+    # result = usa.evaluate_simulation_metric(
+    #     params_opt,
+    #     kripke_components,
+    #     abstraction_shape,
+    #     domain_lb,
+    #     domain_ub,
+    #     horizon=args['horizon'],
+    #     num_samples=64,
+    #     batch_size=256,
+    #     refine=False,
+    #     verbose=False,
+    # )
+    # print(f"    > Epsilon = {result.epsilon}")
+    # print(f"    > Mean epsilon = {result.epsilon_mean}")
+    # print(f"    > Q1 epsilon = {result.epsilon_q1}")
+    # print(f"    > Median epsilon = {result.epsilon_median}")
+    # print(f"    > Q3 epsilon = {result.epsilon_q3}")
 
 
 
