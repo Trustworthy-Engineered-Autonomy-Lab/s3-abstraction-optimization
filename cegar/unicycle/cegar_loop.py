@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from abstraction import Abstraction, Rect, AffineDynamics
 
@@ -220,6 +220,112 @@ def spot_get_counterexample_lasso(
     prefix, cycle = _parse_spot_run_to_lasso(str(run))
     return prefix, cycle
 
+
+def reach_avoid_get_counterexample_lasso(
+    absys: Abstraction,
+    init_uids: Set[int],
+    merge_actions: bool = True,
+) -> Optional[Tuple[List[int], List[int]]]:
+    """
+    Find a counterexample to ``(!unsafe) U goal`` directly in the graph.
+
+    A violating run either reaches unsafe/OUT before goal, or has an
+    infinite cycle that avoids goal.  This formula-specific DFS produces
+    the same prefix/cycle shape expected by the validator and avoids a hard
+    runtime dependency on Spot for the unicycle reach-avoid experiment.
+    """
+    label_cache: Dict[int, Set[str]] = {
+        absys.OUT_UID: set(absys.ap_labeler(None))
+    }
+
+    def labels(uid: int) -> Set[str]:
+        if uid not in label_cache:
+            node = absys.part.leaves.get(uid)
+            label_cache[uid] = (
+                set(absys.ap_labeler(node.rect))
+                if node is not None
+                else {"unsafe"}
+            )
+        return label_cache[uid]
+
+    def successors(uid: int) -> List[int]:
+        by_action = absys.tr.succ.get(uid, {})
+        if not by_action:
+            return [uid]  # deadlocks stutter in the corresponding Kripke graph
+        if merge_actions:
+            merged: Set[int] = set()
+            for values in by_action.values():
+                merged |= values
+            return sorted(merged) if merged else [uid]
+        merged = set()
+        for values in by_action.values():
+            merged |= values
+        return sorted(merged) if merged else [uid]
+
+    def is_goal(uid: int) -> bool:
+        return "goal" in labels(uid)
+
+    def is_bad(uid: int) -> bool:
+        return uid == absys.OUT_UID or "unsafe" in labels(uid)
+
+    def complete_bad_prefix_to_lasso(path: List[int]):
+        """After safety is violated, follow arbitrary edges to a real cycle."""
+        walk = list(path)
+        first_position = {uid: i for i, uid in enumerate(walk)}
+        while True:
+            nxt = successors(walk[-1])[0]
+            if nxt in first_position:
+                cycle_start = first_position[nxt]
+                return walk[:cycle_start], walk[cycle_start:]
+            first_position[nxt] = len(walk)
+            walk.append(nxt)
+
+    finished: Set[int] = set()
+    for initial in sorted(init_uids):
+        if initial != absys.OUT_UID and initial not in absys.part.leaves:
+            continue
+        # Reaching goal ends the reach-avoid obligation for this run.
+        if is_goal(initial):
+            continue
+        if is_bad(initial):
+            return complete_bad_prefix_to_lasso([initial])
+        if initial in finished:
+            continue
+
+        stack_nodes: List[int] = [initial]
+        stack_iters = [iter(successors(initial))]
+        stack_position = {initial: 0}
+
+        while stack_nodes:
+            uid = stack_nodes[-1]
+            try:
+                nxt = next(stack_iters[-1])
+            except StopIteration:
+                finished.add(uid)
+                stack_position.pop(uid, None)
+                stack_nodes.pop()
+                stack_iters.pop()
+                continue
+
+            if is_goal(nxt):
+                continue
+            if is_bad(nxt):
+                return complete_bad_prefix_to_lasso(stack_nodes + [nxt])
+            if nxt in stack_position:
+                cycle_start = stack_position[nxt]
+                return (
+                    list(stack_nodes[:cycle_start]),
+                    list(stack_nodes[cycle_start:]),
+                )
+            if nxt in finished:
+                continue
+
+            stack_position[nxt] = len(stack_nodes)
+            stack_nodes.append(nxt)
+            stack_iters.append(iter(successors(nxt)))
+
+    return None
+
 # Validation 
 def expand_lasso(prefix: List[int], cycle: List[int], repeat_cycle_once: bool = True) -> List[int]:
     path = list(prefix) + list(cycle)
@@ -263,18 +369,9 @@ def _bbox_of_points(pts: np.ndarray) -> Rect:
 
 def _point_to_uid(absys: Abstraction, p: np.ndarray) -> int:
     x, y = float(p[0]), float(p[1])
-    z = float(p[2]) if len(p) > 2 else None
-    for uid, node in absys.part.leaves.items():
-        if uid == absys.OUT_UID:
-            continue
-        r = node.rect
-        if not (r.xmin <= x <= r.xmax and r.ymin <= y <= r.ymax):
-            continue
-        if z is not None and r.zmin != r.zmax:
-            if not (r.zmin <= z <= r.zmax):
-                continue
-        return uid
-    return absys.OUT_UID
+    z = float(p[2]) if len(p) > 2 else 0.0
+    uid = absys.part.query_point(x, y, z)
+    return uid if uid >= 0 else absys.OUT_UID
 
 
 def _infer_goal_ball_from_ap_labeler(absys: Abstraction, action: str = "step"):
@@ -470,12 +567,17 @@ def split_cell(
     leaf_uid: int,
     mode: str = "auto",
     action: str = "step",
+    split_dims: Optional[Tuple[bool, bool, bool]] = None,
 ) -> Tuple[int, ...]:
 
     node = absys.part.leaves[leaf_uid]
     r = node.rect
 
-    split_x, split_y, split_z = choose_split_dims(absys, leaf_uid, mode=mode, action=action)
+    if split_dims is None:
+        split_dims = choose_split_dims(
+            absys, leaf_uid, mode=mode, action=action
+        )
+    split_x, split_y, split_z = split_dims
 
     xm = 0.5 * (r.xmin + r.xmax) if split_x else None
     ym = 0.5 * (r.ymin + r.ymax) if split_y else None
@@ -524,6 +626,8 @@ class CEGARResult:
     last_cex: Optional[Tuple[List[int], List[int]]]
     ignored_counterexamples: int
     refinements: int
+    stopped: bool = False
+    stop_reason: Optional[str] = None
 
 
 def run_cegar(
@@ -539,6 +643,9 @@ def run_cegar(
     min_cell_theta: Optional[float] = None,
     split_mode: str = "auto",
     verbose: bool = True,
+    counterexample_backend: str = "auto",
+    stop_requested: Optional[Callable[[], bool]] = None,
+    max_total_states: Optional[int] = None,
 ) -> CEGARResult:
     """
     Full CEGAR loop:
@@ -566,9 +673,17 @@ def run_cegar(
         phi = absys.reach_avoid_ltl(goal_ap="goal", unsafe_ap="unsafe")
 
 
+    if counterexample_backend not in {"auto", "graph", "spot"}:
+        raise ValueError(
+            "counterexample_backend must be 'auto', 'graph', or 'spot'"
+        )
+    if max_total_states is not None and max_total_states <= 0:
+        raise ValueError("max_total_states must be positive or None")
+
     refinements = 0
     ignored = 0
     last_cex: Optional[Tuple[List[int], List[int]]] = None
+    iterations_completed = 0
 
     # Local, mutable copy -- we update this after every split so that stale
     init_uids = set(init_uids)
@@ -579,17 +694,65 @@ def run_cegar(
         absys.rebuild_all_transitions()
 
     for it in range(max_iters):
+        if (
+            max_total_states is not None
+            and len(absys.part.leaves) >= max_total_states
+        ):
+            if verbose:
+                print(
+                    f"[CEGAR] State limit reached: "
+                    f"{len(absys.part.leaves)}/{max_total_states} leaves."
+                )
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="state_limit",
+            )
+        if stop_requested is not None and stop_requested():
+            if verbose:
+                print("[CEGAR] Stop requested; returning at an iteration boundary.")
+            return CEGARResult(
+                False, iterations_completed, last_cex, ignored, refinements,
+                stopped=True,
+                stop_reason="external_stop",
+            )
+
         if verbose:
             print(f"\n[CEGAR] Iter {it}: checking phi = {phi}")
 
-        cex = spot_get_counterexample_lasso(absys, init_uids, phi, merge_actions=merge_actions)
+        normalized_phi = "".join(phi.split())
+        use_graph = (
+            counterexample_backend == "graph" or
+            (
+                counterexample_backend == "auto" and
+                normalized_phi in {
+                    "(!unsafe)Ugoal",
+                    "G!unsafe&Fgoal",
+                }
+            )
+        )
+        if use_graph:
+            cex = reach_avoid_get_counterexample_lasso(
+                absys, init_uids, merge_actions=merge_actions
+            )
+        else:
+            cex = spot_get_counterexample_lasso(
+                absys, init_uids, phi, merge_actions=merge_actions
+            )
         if cex is None:
             if verbose:
                 print("[CEGAR] VERIFIED (no abstract counterexample).")
-            return CEGARResult(True, it, None, ignored, refinements)
+            return CEGARResult(
+                True, iterations_completed, None, ignored, refinements
+            )
 
         prefix, cycle = cex
         last_cex = cex
+        iterations_completed += 1
         if verbose:
             print("[CEGAR] Abstract counterexample found.")
             print("  prefix:", prefix)
@@ -601,7 +764,9 @@ def run_cegar(
             if verbose:
                 print("[CEGAR] Found CONCRETE-feasible counterexample at current precision.")
                 print("[CEGAR] NOT VERIFIED.")
-            return CEGARResult(False, it + 1, last_cex, ignored, refinements)
+            return CEGARResult(
+                False, iterations_completed, last_cex, ignored, refinements
+            )
 
         # Spurious -> refine
         uid = vr.refine_uid
@@ -624,7 +789,39 @@ def run_cegar(
         if verbose:
             print(f"[CEGAR] Spurious. Refining uid={uid} (iter {it}, mode={split_mode}).")
 
-        new_children = split_cell(absys, uid, mode=split_mode, action=action)
+        split_dims = choose_split_dims(
+            absys, uid, mode=split_mode, action=action
+        )
+        child_count = 2 ** sum(bool(value) for value in split_dims)
+        prospective_leaf_count = (
+            len(absys.part.leaves) - 1 + child_count
+        )
+        if (
+            max_total_states is not None
+            and prospective_leaf_count > max_total_states
+        ):
+            if verbose:
+                print(
+                    "[CEGAR] Next split would exceed state limit: "
+                    f"{prospective_leaf_count}>{max_total_states}."
+                )
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="state_limit",
+            )
+
+        new_children = split_cell(
+            absys,
+            uid,
+            mode=split_mode,
+            action=action,
+            split_dims=split_dims,
+        )
         refinements += 1
 
         # --- BUG FIX: keep init_uids in sync with the (now-changed) partition ---
@@ -635,5 +832,10 @@ def run_cegar(
         # absys.rebuild_all_transitions()
 
     if verbose:
-        print(f"\n[CEGAR] Gave up after {it + 1} iteration(s) (max_iters={max_iters}).")
-    return CEGARResult(False, it + 1, last_cex, ignored, refinements)
+        print(
+            f"\n[CEGAR] Gave up after {iterations_completed} iteration(s) "
+            f"(max_iters={max_iters})."
+        )
+    return CEGARResult(
+        False, iterations_completed, last_cex, ignored, refinements
+    )

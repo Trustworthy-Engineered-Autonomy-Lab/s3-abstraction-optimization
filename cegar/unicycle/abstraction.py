@@ -1,4 +1,5 @@
 from __future__ import annotations
+from bisect import bisect_left, bisect_right
 import numpy as np
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Set, Tuple, Iterable, Callable
@@ -69,6 +70,12 @@ class RectPartition:
         self.roots = roots
         self._next_uid = next_uid
         self.leaves: Dict[int, CellNode] = {}
+        # Built lazily because older pickled checkpoints do not have these
+        # attributes.  The index reduces a uniform-grid box query from a scan
+        # of every root cell to a scan of only the roots touched by the box.
+        self._uniform_index_ready = False
+        self._uniform_root_edges = None
+        self._uniform_root_shape = None
         for r in roots:
             self._collect_leaves(r)
 
@@ -95,7 +102,9 @@ class RectPartition:
 
     def query_point(self, x, y, z=0.0) -> int:
         """Return uid of leaf containing (x, y, z)."""
-        for uid, node in self.leaves.items():
+        point_box = Rect(x, x, y, y, z, z)
+        for uid in self.query_intersecting_leaves(point_box):
+            node = self.leaves[uid]
             r = node.rect
             if (r.xmin <= x <= r.xmax and
                 r.ymin <= y <= r.ymax and
@@ -150,9 +159,111 @@ class RectPartition:
     def query_intersecting_leaves(self, box: Rect) -> List[int]:
         """Uses the partition tree itself as the spatial index."""
         out: List[int] = []
-        for r in self.roots:
-            self._query_node(r, box, out)
+        self._ensure_uniform_root_index()
+
+        edges = getattr(self, "_uniform_root_edges", None)
+        shape = getattr(self, "_uniform_root_shape", None)
+        if edges is None or shape is None:
+            # Compatibility fallback for a non-uniform partition forest.
+            for r in self.roots:
+                self._query_node(r, box, out)
+            return out
+
+        x_edges, y_edges, z_edges = edges
+        nx, ny, nz = shape
+
+        x_range = self._overlapping_root_range(
+            box.xmin, box.xmax, x_edges, nx
+        )
+        y_range = self._overlapping_root_range(
+            box.ymin, box.ymax, y_edges, ny
+        )
+        z_range = self._overlapping_root_range(
+            box.zmin, box.zmax, z_edges, nz
+        )
+        if x_range is None or y_range is None or z_range is None:
+            return out
+
+        for i in range(x_range[0], x_range[1] + 1):
+            for j in range(y_range[0], y_range[1] + 1):
+                base = (i * ny + j) * nz
+                for k in range(z_range[0], z_range[1] + 1):
+                    self._query_node(self.roots[base + k], box, out)
         return out
+
+    @staticmethod
+    def _overlapping_root_range(lo, hi, edges, count):
+        """Indices of closed root intervals intersecting closed [lo, hi]."""
+        if lo != lo or hi != hi:  # NaN: conservatively scan this whole axis.
+            return (0, count - 1)
+        if hi < edges[0] or lo > edges[-1]:
+            return None
+
+        # At an exact grid boundary both adjacent closed cells intersect.
+        first = max(0, min(count - 1, bisect_left(edges, lo) - 1))
+        last = max(0, min(count - 1, bisect_right(edges, hi) - 1))
+        return (first, last)
+
+    def _ensure_uniform_root_index(self) -> None:
+        """Infer and cache the uniform-root layout, including old checkpoints."""
+        if getattr(self, "_uniform_index_ready", False):
+            return
+
+        self._uniform_index_ready = True
+        self._uniform_root_edges = None
+        self._uniform_root_shape = None
+        if not self.roots:
+            return
+
+        x_edges = sorted({
+            edge
+            for node in self.roots
+            for edge in (node.rect.xmin, node.rect.xmax)
+        })
+        y_edges = sorted({
+            edge
+            for node in self.roots
+            for edge in (node.rect.ymin, node.rect.ymax)
+        })
+        z_edges = sorted({
+            edge
+            for node in self.roots
+            for edge in (node.rect.zmin, node.rect.zmax)
+        })
+
+        nx = len(x_edges) - 1
+        ny = len(y_edges) - 1
+        nz = len(z_edges) - 1
+        if nx <= 0 or ny <= 0:
+            return
+        if nz <= 0:
+            # A genuinely 2-D partition has one degenerate z slab.
+            z_value = self.roots[0].rect.zmin
+            z_edges = [z_value, z_value]
+            nz = 1
+        if nx * ny * nz != len(self.roots):
+            return
+
+        # RectPartition.uniform_grid orders roots i -> j -> k.  Verify that
+        # assumption before using constant-time flattened indexing.
+        tol = 1e-12
+        for flat, node in enumerate(self.roots):
+            i = flat // (ny * nz)
+            rem = flat % (ny * nz)
+            j = rem // nz
+            k = rem % nz
+            r = node.rect
+            expected = (
+                x_edges[i], x_edges[i + 1],
+                y_edges[j], y_edges[j + 1],
+                z_edges[k], z_edges[k + 1],
+            )
+            actual = (r.xmin, r.xmax, r.ymin, r.ymax, r.zmin, r.zmax)
+            if any(abs(a - b) > tol for a, b in zip(actual, expected)):
+                return
+
+        self._uniform_root_edges = (x_edges, y_edges, z_edges)
+        self._uniform_root_shape = (nx, ny, nz)
 
     def _query_node(self, node: CellNode, box: Rect, out: List[int]) -> None:
         if not node.rect.intersects(box):

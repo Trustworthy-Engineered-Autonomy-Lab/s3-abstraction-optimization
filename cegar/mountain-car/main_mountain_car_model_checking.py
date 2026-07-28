@@ -1,50 +1,3 @@
-# main_mountain_car.py
-#
-# Mountain-car analog of main.py (unicycle) -- fully self-contained, no
-# external mountain_car_system.py needed. Structurally 2D, like the
-# earlier "synthetic" example: position and velocity only, no theta/z
-# dimension.
-#
-# The dynamics/Jacobian/Hessian/interval/Taylor-remainder machinery below
-# (through the Lipschitz-array section) is the pretrained-DDPG-actor
-# reachability code, inlined directly rather than imported as a separate
-# module. It already handles the neural network's piecewise-affine (ReLU)
-# reachability correctly, including certified interval bound propagation
-# and graceful handling of non-smooth (ReLU / clip / wall-reset)
-# boundaries -- nothing about that logic has been changed, only the
-# `mcs.` namespace prefix has been removed since everything now lives in
-# one module. The Abstraction/RectPartition/CEGAR wiring (the part that's
-# actually new here, playing the same role main.py's build_abstraction
-# plays for unicycle) is in the final section below.
-#
-# STRUCTURAL DIFFERENCES FROM UNICYCLE (read before using):
-#
-#   1. NO real "out of bounds" state. cl_system_numeric / interval_cl_system
-#      always clip into [MIN_POSITION,MAX_POSITION] x
-#      [MIN_VELOCITY,MAX_VELOCITY], so OUT_UID should essentially never
-#      fire here (unlike unicycle, where genuine domain-exit was common).
-#
-#   2. The goal is a HALF-SPACE (position >= GOAL_POSITION), not a ball.
-#      cegar_loop.py's validate_lasso_by_set_propagation used to hardcode
-#      a circular goal region -- it now supports a generic is_goal_batch
-#      hook (see MountainCarDynamics.is_goal_batch below), added
-#      specifically to make this port correct. UnicycleDynamics is
-#      unaffected (it doesn't define is_goal_batch, so it keeps using the
-#      old ball-based fallback).
-#
-#   3. ASSUMED: no unsafe/failure region (classic MountainCarContinuous
-#      reachability -- reach the goal, nothing to avoid). phi is
-#      therefore "F goal", not unicycle's "(!unsafe) U goal". If your
-#      setup actually has a failure condition, flag it and this needs an
-#      "unsafe" AP added back in.
-#
-#   4. SCALE MISMATCH: position range is ~1.8, velocity range is ~0.14 --
-#      about a 13x difference. Under split_mode="auto", raw largest-extent
-#      comparisons will burn early splits almost entirely on position
-#      before velocity is ever touched. Consider either unequal NX/NY at
-#      grid-construction time (so initial per-cell widths start out
-#      comparable) or a scale-aware split heuristic if this becomes an
-#      issue in practice -- flagged here, not yet addressed.
 
 from __future__ import annotations
 import contextlib
@@ -65,7 +18,7 @@ with contextlib.redirect_stderr(io.StringIO()):
     from stable_baselines3 import DDPG
 
 from abstraction import Rect, RectPartition, Abstraction
-from cegar_loop import run_cegar
+from cegar_loop_mc import run_cegar
 
 # =====================================================================
 # Globals (pretrained-controller / dynamics constants)
@@ -1444,18 +1397,23 @@ def run_model_checking(
 # =====================================================================
 
 if __name__ == "__main__":
-    res = run_model_checking(
-        nx=60,
-        ny=60,
-        phi="F goal",
-        max_iters=300,
-        min_cell_width=0.0001,
-        min_cell_height=0.0001,
-        max_refine_depth=25,
-        split_mode="auto",
-        checkpoint_every=1,
-        time_limit_sec=None,  # set to 3 * 60 * 60 for timed runs
-    )
+    # res = run_model_checking(
+    #     nx=60,
+    #     ny=60,
+    #     phi="F goal",
+    #     max_iters=300,
+    #     min_cell_width=0.0001,
+    #     min_cell_height=0.0001,
+    #     max_refine_depth=25,
+    #     split_mode="auto",
+    #     checkpoint_every=1,
+    #     time_limit_sec=None,  # set to 3 * 60 * 60 for timed runs
+    # )
 
-    print("\nFINAL:", "VERIFIED" if res.verified else "NOT VERIFIED")
-    print("iters:", res.iterations, "refinements:", res.refinements)
+    # print("\nFINAL:", "VERIFIED" if res.verified else "NOT VERIFIED")
+    # print("iters:", res.iterations, "refinements:", res.refinements)\
+
+    with open("cegar/mountain-car/mountain_90x90.pkl", "rb") as f:
+            data = pickle.load(f)
+    
+    print(type(data))

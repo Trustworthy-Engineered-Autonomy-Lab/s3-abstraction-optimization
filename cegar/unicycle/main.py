@@ -508,17 +508,30 @@ class UnicycleDynamics:
       5. Apply theta_min_arc_intervals to handle -pi/pi wrapping
     """
 
-    def __init__(self, x_edges, y_edges, theta_edges):
+    def __init__(
+        self,
+        x_edges,
+        y_edges,
+        theta_edges,
+        *,
+        precompute_lagrange: bool = False,
+    ):
         self.x_edges     = np.asarray(x_edges)
         self.y_edges     = np.asarray(y_edges)
         self.theta_edges = np.asarray(theta_edges)
 
-        print("[UnicycleDynamics] Precomputing Lagrange error bounds...", flush=True)
-        self._error_bounds = lagrange_error_bounds_grid(
-            x_edges, y_edges, theta_edges
-        )  # (Nx, Ny, Ntheta, 3)
-        print(f"[UnicycleDynamics] Error bounds shape: {self._error_bounds.shape}",
-              flush=True)
+        # image_bbox() uses the tighter interval-Hessian remainder below, so
+        # eagerly allocating a second Nx*Ny*Ntheta error tensor is unnecessary
+        # for production runs (and especially costly for a 90^3 grid).  Keep
+        # the legacy option for callers that use _lagrange_bound directly.
+        self._error_bounds = None
+        if precompute_lagrange:
+            print("[UnicycleDynamics] Precomputing Lagrange error bounds...", flush=True)
+            self._error_bounds = lagrange_error_bounds_grid(
+                x_edges, y_edges, theta_edges
+            )  # (Nx, Ny, Ntheta, 3)
+            print(f"[UnicycleDynamics] Error bounds shape: {self._error_bounds.shape}",
+                  flush=True)
 
     xstar = np.array([40.0, 20.0])
     goal_radius = 8.0
@@ -544,7 +557,8 @@ class UnicycleDynamics:
                         0, len(self.theta_edges) - 2))
 
         tol = 1e-9
-        if (abs(r.xmin - self.x_edges[i])         < tol and
+        if (self._error_bounds is not None and
+            abs(r.xmin - self.x_edges[i])         < tol and
             abs(r.xmax - self.x_edges[i+1])        < tol and
             abs(r.ymin - self.y_edges[j])          < tol and
             abs(r.ymax - self.y_edges[j+1])        < tol and
@@ -621,16 +635,23 @@ class UnicycleDynamics:
 # Build abstraction
 # =====================================================================
 
-def build_abstraction():
+def build_abstraction(nx=None, ny=None, nz=None):
+    """Build a complete abstraction, including all leaf transitions."""
+    nx = NX if nx is None else int(nx)
+    ny = NY if ny is None else int(ny)
+    nz = NZ if nz is None else int(nz)
+    if nx <= 0 or ny <= 0 or nz <= 0:
+        raise ValueError("nx, ny, and nz must all be positive")
+
     domain = Rect(xmin=X_MIN, xmax=X_MAX,
                   ymin=Y_MIN, ymax=Y_MAX,
                   zmin=Z_MIN, zmax=Z_MAX)
 
-    x_edges     = np.linspace(X_MIN, X_MAX, NX + 1)
-    y_edges     = np.linspace(Y_MIN, Y_MAX, NY + 1)
-    theta_edges = np.linspace(Z_MIN, Z_MAX, NZ + 1)
+    x_edges     = np.linspace(X_MIN, X_MAX, nx + 1)
+    y_edges     = np.linspace(Y_MIN, Y_MAX, ny + 1)
+    theta_edges = np.linspace(Z_MIN, Z_MAX, nz + 1)
 
-    part = RectPartition.uniform_grid(domain, nx=NX, ny=NY, nz=NZ)
+    part = RectPartition.uniform_grid(domain, nx=nx, ny=ny, nz=nz)
     dyn  = UnicycleDynamics(x_edges, y_edges, theta_edges)
 
     absys = Abstraction(
@@ -640,7 +661,7 @@ def build_abstraction():
     )
     absys.rebuild_all_transitions()
 
-    print(f"#leaves: {len(absys.part.leaves)}  (grid {NX}x{NY}x{NZ})")
+    print(f"#leaves: {len(absys.part.leaves)}  (grid {nx}x{ny}x{nz})")
     return absys, domain
 
 

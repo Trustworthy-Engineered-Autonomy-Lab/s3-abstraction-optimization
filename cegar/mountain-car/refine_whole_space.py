@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from abstraction import Abstraction, Rect
 
-from cegar_loop import run_cegar
+from cegar_loop_mc import run_cegar
 
 
 def rect_volume(r) -> float:

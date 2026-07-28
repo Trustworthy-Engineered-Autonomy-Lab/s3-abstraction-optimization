@@ -1,7 +1,10 @@
 # refine_whole_space.py
 import gc
+import pickle
 import random
-from typing import Dict, List, Set, Tuple
+import time
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
 from collections import deque
 
@@ -11,6 +14,47 @@ import matplotlib.patches as patches
 from abstraction import Abstraction, Rect
 
 from cegar_loop import run_cegar
+
+
+MODEL_CHECKPOINT_VERSION = 1
+
+
+def save_model_checkpoint(
+    absys: Abstraction,
+    path: str | Path,
+    *,
+    domain: Optional[Rect] = None,
+    metadata: Optional[dict] = None,
+    classification: Optional["RegionClassification"] = None,
+) -> Path:
+    """Atomically save the complete partition and transition relation."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "checkpoint_version": MODEL_CHECKPOINT_VERSION,
+        "absys": absys,
+        "domain": domain,
+        "metadata": dict(metadata or {}),
+        "saved_wall_time": time.time(),
+        "saved_monotonic": time.monotonic(),
+    }
+    if classification is not None:
+        payload["classification"] = {
+            "verified": set(classification.verified),
+            "refuted": set(classification.refuted),
+            "unknown": set(classification.unknown),
+        }
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with tmp_path.open("wb") as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp_path.replace(path)
+    print(
+        f"[CHECKPOINT] saved {len(absys.part.leaves)} leaves and "
+        f"{len(absys.tr.succ)} transition sources to {path}",
+        flush=True,
+    )
+    return path
 
 
 def rect_volume(r) -> float:
@@ -503,13 +547,30 @@ def refine_from_unknowns_single_pass(
     gc_every: int = 100,
     ordering: str = "largest",
     rand_seed: int = 0,
+    deadline: Optional[float] = None,
+    stop_requested: Optional[Callable[[], bool]] = None,
+    progress_callback: Optional[
+        Callable[[Abstraction, dict], None]
+    ] = None,
+    counterexample_backend: str = "auto",
+    completed_candidate_uids: Optional[Set[int]] = None,
+    max_total_states: Optional[int] = None,
 ) -> int:
     """
     ordering: "largest"  — largest cells first (original default)
               "smallest" — smallest cells first (inverted)
               "random"   — shuffled with rand_seed
     """
-    candidates = [u for u in unknown_uids if u in absys.part.leaves]
+    completed = (
+        completed_candidate_uids
+        if completed_candidate_uids is not None
+        else set()
+    )
+    candidates = [
+        u
+        for u in unknown_uids
+        if u in absys.part.leaves and u not in completed
+    ]
 
     if ordering == "largest":
         ordered = sorted(candidates, key=lambda u: (-cell_volume(absys, u), u))
@@ -535,12 +596,35 @@ def refine_from_unknowns_single_pass(
           + f", split_mode={split_mode!r}"
           + f", min_cell_theta={min_cell_theta}"
           + ")...", flush=True)
+
+    def should_stop() -> bool:
+        if (
+            max_total_states is not None
+            and len(absys.part.leaves) >= max_total_states
+        ):
+            return True
+        if stop_requested is not None and stop_requested():
+            return True
+        return deadline is not None and time.monotonic() >= deadline
+
+    stopped = False
+    processed = 0
     for i, uid in enumerate(ordered):
+        if should_stop():
+            stopped = True
+            print(
+                f"[REFINE] stop requested before candidate {i}/{total}.",
+                flush=True,
+            )
+            break
+
         if i % 200 == 0:
             print(f"  [refine] {i}/{total} leaves={len(absys.part.leaves)} "
                   f"refinements_so_far={total_refinements}", flush=True)
 
         if uid not in absys.part.leaves:
+            processed += 1
+            completed.add(uid)
             continue
 
         res = run_cegar(
@@ -555,7 +639,11 @@ def refine_from_unknowns_single_pass(
             min_cell_theta=min_cell_theta,
             split_mode=split_mode,
             verbose=False,
+            counterexample_backend=counterexample_backend,
+            stop_requested=should_stop,
+            max_total_states=max_total_states,
         )
+        processed += 1
         total_refinements  += getattr(res, "refinements", 0)
         total_iters        += getattr(res, "iterations", 0)
         total_ignored       += getattr(res, "ignored_counterexamples", 0)
@@ -564,7 +652,49 @@ def refine_from_unknowns_single_pass(
         elif getattr(res, "refinements", 0) == 0:
             n_no_splits += 1
 
-        if i % gc_every == 0:
+        if not getattr(res, "stopped", False):
+            completed.add(uid)
+
+        progress = {
+            "stage": "refine_from_unknowns_single_pass",
+            "processed": processed,
+            "ordered_total": total,
+            "refinements": total_refinements,
+            "iterations": total_iters,
+            "ignored_counterexamples": total_ignored,
+            "cells_verified_by_cegar": n_verified_by_cegar,
+            "cells_with_0_splits": n_no_splits,
+            "stopped": bool(getattr(res, "stopped", False) or should_stop()),
+            "stop_reason": (
+                getattr(res, "stop_reason", None)
+                or (
+                    "state_limit"
+                    if (
+                        max_total_states is not None
+                        and len(absys.part.leaves) >= max_total_states
+                    )
+                    else "deadline_or_signal"
+                    if should_stop()
+                    else None
+                )
+            ),
+            "completed_candidate_uids": completed,
+            "completed_candidate_count": len(completed),
+            "max_total_states": max_total_states,
+            "current_total_states": len(absys.part.leaves),
+        }
+        if progress_callback is not None:
+            progress_callback(absys, progress)
+
+        if getattr(res, "stopped", False) or should_stop():
+            stopped = True
+            print(
+                f"[REFINE] stop requested after candidate {i + 1}/{total}.",
+                flush=True,
+            )
+            break
+
+        if gc_every > 0 and i % gc_every == 0:
             gc.collect()
 
     print(f"[REFINE] pass done.", flush=True)
@@ -573,6 +703,13 @@ def refine_from_unknowns_single_pass(
     print(f"  Total ignored CEs:          {total_ignored}")
     print(f"  Cells verified by CEGAR:    {n_verified_by_cegar}")
     print(f"  Cells with 0 splits:        {n_no_splits}")
+    print(f"  Candidates processed:       {processed}/{total}")
+    print(f"  Stopped by limit/signal:    {stopped}")
+    if max_total_states is not None:
+        print(
+            f"  State limit:                "
+            f"{len(absys.part.leaves)}/{max_total_states}"
+        )
     print(f"  Leaves:                     {len(absys.part.leaves)}", flush=True)
     return total_refinements
 
@@ -590,6 +727,14 @@ def refine_one_round(
     gc_every: int = 100,
     ordering: str = "largest",
     rand_seed: int = 0,
+    deadline: Optional[float] = None,
+    stop_requested: Optional[Callable[[], bool]] = None,
+    progress_callback: Optional[
+        Callable[[Abstraction, dict], None]
+    ] = None,
+    counterexample_backend: str = "auto",
+    completed_candidate_uids: Optional[Set[int]] = None,
+    max_total_states: Optional[int] = None,
 ) -> RegionClassification:
     """Single round of refinement"""
     print(f"\n{'='*60}", flush=True)
@@ -612,6 +757,12 @@ def refine_one_round(
             gc_every=gc_every,
             ordering=ordering,
             rand_seed=rand_seed,
+            deadline=deadline,
+            stop_requested=stop_requested,
+            progress_callback=progress_callback,
+            counterexample_backend=counterexample_backend,
+            completed_candidate_uids=completed_candidate_uids,
+            max_total_states=max_total_states,
         )
     else:
         print("[ROUND 1/1] No unknowns to refine.", flush=True)
