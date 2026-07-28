@@ -47,14 +47,14 @@ def collect_data(fname):
     args['shape'] = abstraction_shape
     args['domain_lb'] = domain_lb
     args['domain_ub'] = domain_ub
-    args['temp_in'] = 1.0
-    args['temp_out'] = 1.0
+    args['temp_in'] = 0.1
+    args['temp_out'] = 0.1
     args['inflation_coefs'] = np.array([0.2, 0.2])
 
     horizons = [1, 2, 3, 4, 5]
 
     # Instantiate random parameters
-    num_samples = 100
+    num_samples = 30
     key = jax.random.PRNGKey(0)
     n_cols = abstraction_shape[0] + abstraction_shape[1]
     param_array = 2.0 * jax.random.normal(key, shape=(num_samples, n_cols))
@@ -371,26 +371,26 @@ if __name__ == "__main__":
 
     case_study_dir = Path(__file__).resolve().parent
 
-    fname = case_study_dir / "proxy_analysis_data_50_01.pkl"
+    fname = case_study_dir / "proxy_analysis_data_50_01_new.pkl"
 
-    # collect_data(fname)
+    collect_data(fname)
 
     with open(fname, "rb") as f:
         data = pkl.load(f)
 
-    proxies = data["proxies"]
-    meds = data["median_epsilons"]
-    maxs = data["max_epsilons"]
+    # proxies = data["proxies"]
+    # meds = data["median_epsilons"]
+    # maxs = data["max_epsilons"]
 
     # print(q3s)
 
-    bootstrap_corr(proxies[0, :], meds[0, :])
+    # bootstrap_corr(proxies[0, :], meds[0, :])
 
     # pearson_r = stats.pearsonr(proxies[0, :], meds[0, :]).statistic
 
     # print(pearson_r)
 
-    # print_report(data)
+    print_report(data)
 
 # if __name__ == "__main__":
 

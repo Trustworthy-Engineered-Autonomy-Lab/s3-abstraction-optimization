@@ -220,6 +220,82 @@ def spot_get_counterexample_lasso(
     prefix, cycle = _parse_spot_run_to_lasso(str(run))
     return prefix, cycle
 
+
+def eventually_goal_get_counterexample_lasso(
+    absys: Abstraction,
+    init_uids: Set[int],
+    merge_actions: bool = True,
+) -> Optional[Tuple[List[int], List[int]]]:
+    """Find a counterexample to CTL/LTL universal eventual goal.
+
+    A violation exists exactly when a non-goal cycle is reachable from an
+    initial state while remaining in non-goal states.  This graph backend
+    avoids the unavailable Spot dependency and matches ``A F goal`` for the
+    deterministic-action Mountain Car abstraction.
+    """
+    del merge_actions
+    label_cache: Dict[int, Set[str]] = {
+        absys.OUT_UID: set(absys.ap_labeler(None))
+    }
+
+    def labels(uid: int) -> Set[str]:
+        if uid not in label_cache:
+            node = absys.part.leaves.get(uid)
+            label_cache[uid] = (
+                set(absys.ap_labeler(node.rect))
+                if node is not None
+                else set()
+            )
+        return label_cache[uid]
+
+    def successors(uid: int) -> List[int]:
+        merged: Set[int] = set()
+        for values in absys.tr.succ.get(uid, {}).values():
+            merged |= values
+        return sorted(merged) if merged else [uid]
+
+    def is_goal(uid: int) -> bool:
+        return "goal" in labels(uid)
+
+    finished: Set[int] = set()
+    for initial in sorted(init_uids):
+        if initial != absys.OUT_UID and initial not in absys.part.leaves:
+            continue
+        if is_goal(initial) or initial in finished:
+            continue
+
+        stack_nodes: List[int] = [initial]
+        stack_iters = [iter(successors(initial))]
+        stack_position = {initial: 0}
+
+        while stack_nodes:
+            uid = stack_nodes[-1]
+            try:
+                nxt = next(stack_iters[-1])
+            except StopIteration:
+                finished.add(uid)
+                stack_position.pop(uid, None)
+                stack_nodes.pop()
+                stack_iters.pop()
+                continue
+
+            if is_goal(nxt):
+                continue
+            if nxt in stack_position:
+                cycle_start = stack_position[nxt]
+                return (
+                    list(stack_nodes[:cycle_start]),
+                    list(stack_nodes[cycle_start:]),
+                )
+            if nxt in finished:
+                continue
+
+            stack_position[nxt] = len(stack_nodes)
+            stack_nodes.append(nxt)
+            stack_iters.append(iter(successors(nxt)))
+
+    return None
+
 # Validation 
 def expand_lasso(prefix: List[int], cycle: List[int], repeat_cycle_once: bool = True) -> List[int]:
     path = list(prefix) + list(cycle)
@@ -263,18 +339,9 @@ def _bbox_of_points(pts: np.ndarray) -> Rect:
 
 def _point_to_uid(absys: Abstraction, p: np.ndarray) -> int:
     x, y = float(p[0]), float(p[1])
-    z = float(p[2]) if len(p) > 2 else None
-    for uid, node in absys.part.leaves.items():
-        if uid == absys.OUT_UID:
-            continue
-        r = node.rect
-        if not (r.xmin <= x <= r.xmax and r.ymin <= y <= r.ymax):
-            continue
-        if z is not None and r.zmin != r.zmax:
-            if not (r.zmin <= z <= r.zmax):
-                continue
-        return uid
-    return absys.OUT_UID
+    z = float(p[2]) if len(p) > 2 else 0.0
+    uid = absys.part.query_point(x, y, z)
+    return uid if uid >= 0 else absys.OUT_UID
 
 
 def _infer_goal_ball_from_ap_labeler(absys: Abstraction, action: str = "step"):
@@ -310,7 +377,7 @@ def validate_lasso_by_set_propagation(
 ) -> ValidationResult:
     import numpy as np
 
-    MAX_STEPS = 5000
+    MAX_STEPS = 10_000
 
     path = expand_lasso(prefix, cycle, repeat_cycle_once=True)
     if len(path) < 1:
@@ -342,8 +409,8 @@ def validate_lasso_by_set_propagation(
                                           if pts.shape[1] > 2
                                           else pts)]
 
-    # Step 0 goal check
-    if bool(np.any(_goal_check_batch(absys, pts[:, :2], action=action))):
+    # Match mountain-car-v3: every corner must reach the goal together.
+    if bool(np.all(_goal_check_batch(absys, pts[:, :2], action=action))):
         return ValidationResult(False, 0, u0, trace)
 
     for t in range(1, MAX_STEPS + 1):
@@ -365,7 +432,7 @@ def validate_lasso_by_set_propagation(
                                       else pts))
 
         # Goal check — spurious if any point reaches goal
-        if bool(np.any(_goal_check_batch(absys, pts[:, :2], action=action))):
+        if bool(np.all(_goal_check_batch(absys, pts[:, :2], action=action))):
             return ValidationResult(False, t, u0, trace)
 
     return ValidationResult(True, None, None, trace)
@@ -479,12 +546,20 @@ def split_cell(
     leaf_uid: int,
     mode: str = "auto",
     action: str = "step",
+    split_dims: Optional[Tuple[bool, bool, bool]] = None,
 ) -> Tuple[int, ...]:
 
     node = absys.part.leaves[leaf_uid]
     r = node.rect
 
-    split_x, split_y, split_z = choose_split_dims(absys, leaf_uid, mode=mode, action=action)
+    if split_dims is None:
+        split_dims = choose_split_dims(
+            absys,
+            leaf_uid,
+            mode=mode,
+            action=action,
+        )
+    split_x, split_y, split_z = split_dims
 
     xm = 0.5 * (r.xmin + r.xmax) if split_x else None
     ym = 0.5 * (r.ymin + r.ymax) if split_y else None
@@ -533,6 +608,8 @@ class CEGARResult:
     last_cex: Optional[Tuple[List[int], List[int]]]
     ignored_counterexamples: int
     refinements: int
+    stopped: bool = False
+    stop_reason: Optional[str] = None
 
 
 def run_cegar(
@@ -553,82 +630,129 @@ def run_cegar(
     stop_requested: Optional[Callable[[], bool]] = None,
     checkpoint_callback: Optional[Callable[[Abstraction, Set[int], int, Optional[Tuple[List[int], List[int]]], int, int], None]] = None,
     checkpoint_every: Optional[int] = None,
+    counterexample_backend: str = "graph",
+    max_total_states: Optional[int] = None,
+    progress_callback: Optional[
+        Callable[[Abstraction, dict], None]
+    ] = None,
 ) -> CEGARResult:
-    """
-    Full CEGAR loop:
-
-      repeat:
-        - Spot finds abstract counterexample lasso for phi
-        - validate lasso via set-propagation (path-consistency)
-        - if spurious: split selected cell and continue
-        - if feasible: return NOT VERIFIED (real counterexample witness at this precision)
-      until max_iters
-
-    split_mode: passed straight through to split_cell / choose_split_dims.
-      "xy" reproduces the old x/y-only bisection; "xyz" always splits all
-      three axes; "auto" (default) picks the single most-useful axis per
-      split (falls back to "largest extent" if no Taylor-remainder signal
-      is available for the current dynamics object).
-
-    min_cell_theta: analogous to min_cell_width/min_cell_height but for the
-      theta axis. Pass this if you want refinement to also stop once theta
-      extent gets small enough -- otherwise theta can in principle keep
-      splitting down toward min_extent inside choose_split_dims.
-
-    prefer_cycle_refine: when True and a spurious counterexample has a
-      non-empty cycle, refine the FIRST CELL OF THE CYCLE instead of
-      validate_lasso_by_set_propagation's default choice (always
-      path[0], i.e. the closest-to-init cell). Default False -- this is
-      an OPT-IN behavioral change, since past results (e.g. unicycle) were
-      produced without it and this preserves exact reproducibility unless
-        the user explicitly enables it.
-    also_refine_prefix_head: when True (and typically combined with
-      prefer_cycle_refine=True), ALSO refine prefix[0] every iteration a
-      spurious CE is found, in addition to whatever prefer_cycle_refine
-      selects. Default False -- opt-in, same reproducibility rationale as
-      prefer_cycle_refine.
-
-    """
+    """Run bounded Mountain Car CEGAR with graph or Spot counterexamples."""
     if phi is None:
-        # original phi value
-        phi = absys.reach_avoid_ltl(goal_ap="goal", unsafe_ap="unsafe")
-
+        phi = "F goal"
+    if counterexample_backend not in {"graph", "auto", "spot"}:
+        raise ValueError(
+            "counterexample_backend must be 'graph', 'auto', or 'spot'"
+        )
+    if max_total_states is not None and max_total_states <= 0:
+        raise ValueError("max_total_states must be positive or None")
 
     refinements = 0
     ignored = 0
     last_cex: Optional[Tuple[List[int], List[int]]] = None
+    iterations_completed = 0
 
-    # Local, mutable copy -- we update this after every split so that stale
     init_uids = set(init_uids)
 
     def _emit_checkpoint(iteration: int) -> None:
         if checkpoint_callback is not None:
-            checkpoint_callback(absys, init_uids, iteration, last_cex, ignored, refinements)
+            checkpoint_callback(
+                absys,
+                init_uids,
+                iteration,
+                last_cex,
+                ignored,
+                refinements,
+            )
 
-    # Ensure transitions exist
-    # (caller can rebuild or rely on incremental updates from split_and_update)
+    def report_progress(stop_reason: Optional[str] = None) -> None:
+        if progress_callback is not None:
+            progress_callback(
+                absys,
+                {
+                    "iterations": iterations_completed,
+                    "refinements": refinements,
+                    "ignored_counterexamples": ignored,
+                    "current_total_states": len(absys.part.leaves),
+                    "max_total_states": max_total_states,
+                    "stop_reason": stop_reason,
+                },
+            )
+
     if not absys.tr.succ:
         absys.rebuild_all_transitions()
 
     for it in range(max_iters):
+        if (
+            max_total_states is not None
+            and len(absys.part.leaves) >= max_total_states
+        ):
+            report_progress("state_limit")
+            _emit_checkpoint(iterations_completed)
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="state_limit",
+            )
         if stop_requested is not None and stop_requested():
             if verbose:
-                print(f"\n[CEGAR] Stop requested at iter {it}; saving checkpoint and exiting.")
-            _emit_checkpoint(it)
-            return CEGARResult(False, it, last_cex, ignored, refinements)
+                print(f"\n[CEGAR] Stop requested at iter {it}.")
+            report_progress("external_stop")
+            _emit_checkpoint(iterations_completed)
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="external_stop",
+            )
 
         if verbose:
             print(f"\n[CEGAR] Iter {it}: checking phi = {phi}")
 
-        cex = spot_get_counterexample_lasso(absys, init_uids, phi, merge_actions=merge_actions)
+        normalized_phi = "".join(phi.split())
+        use_graph = (
+            counterexample_backend == "graph"
+            or (
+                counterexample_backend == "auto"
+                and normalized_phi in {"Fgoal", "AFgoal"}
+            )
+        )
+        if use_graph:
+            cex = eventually_goal_get_counterexample_lasso(
+                absys,
+                init_uids,
+                merge_actions=merge_actions,
+            )
+        else:
+            cex = spot_get_counterexample_lasso(
+                absys,
+                init_uids,
+                phi,
+                merge_actions=merge_actions,
+            )
         if cex is None:
             if verbose:
                 print("[CEGAR] VERIFIED (no abstract counterexample).")
-            _emit_checkpoint(it)
-            return CEGARResult(True, it, None, ignored, refinements)
+            report_progress("verified")
+            _emit_checkpoint(iterations_completed)
+            return CEGARResult(
+                True,
+                iterations_completed,
+                None,
+                ignored,
+                refinements,
+                stop_reason="verified",
+            )
 
         prefix, cycle = cex
         last_cex = cex
+        iterations_completed += 1
         if verbose:
             print("[CEGAR] Abstract counterexample found.")
             print("  prefix:", prefix)
@@ -640,16 +764,18 @@ def run_cegar(
             if verbose:
                 print("[CEGAR] Found CONCRETE-feasible counterexample at current precision.")
                 print("[CEGAR] NOT VERIFIED.")
-            _emit_checkpoint(it + 1)
-            return CEGARResult(False, it + 1, last_cex, ignored, refinements)
+            report_progress("feasible_counterexample")
+            _emit_checkpoint(iterations_completed)
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stop_reason="feasible_counterexample",
+            )
 
-        # Spurious -> refine
-        default_uid = vr.refine_uid  # validate_lasso_by_set_propagation's own choice (path[0])
-
-        # --- Build the list of candidate refine targets for this iteration ---
-        # Default (both flags False): identical to the original behavior --
-        # exactly one target, default_uid, preserving full backward
-        # compatibility / reproducibility of past (e.g. unicycle) results.
+        default_uid = vr.refine_uid
         targets: List[int] = []
 
         cycle_uid = None
@@ -679,13 +805,20 @@ def run_cegar(
             targets.append(cycle_uid)
         elif default_uid is not None:
             targets.append(default_uid)
-        # ----------------------------------------------------------------
-
         if not targets:
             ignored += 1
             if verbose:
                 print("[CEGAR] Spurious CE but no valid refine uid. Ignoring.")
-            break
+            report_progress("unrefinable_counterexample")
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="unrefinable_counterexample",
+            )
 
         any_refined = False
         for t in targets:
@@ -702,26 +835,76 @@ def run_cegar(
             if verbose:
                 print(f"[CEGAR] Spurious. Refining uid={t} (iter {it}, mode={split_mode}).")
 
-            new_children = split_cell(absys, t, mode=split_mode, action=action)
+            split_dims = choose_split_dims(
+                absys,
+                t,
+                mode=split_mode,
+                action=action,
+            )
+            child_count = 2 ** sum(bool(value) for value in split_dims)
+            prospective_leaf_count = (
+                len(absys.part.leaves) - 1 + child_count
+            )
+            if (
+                max_total_states is not None
+                and prospective_leaf_count > max_total_states
+            ):
+                report_progress("state_limit")
+                _emit_checkpoint(iterations_completed)
+                return CEGARResult(
+                    False,
+                    iterations_completed,
+                    last_cex,
+                    ignored,
+                    refinements,
+                    stopped=True,
+                    stop_reason="state_limit",
+                )
+
+            new_children = split_cell(
+                absys,
+                t,
+                mode=split_mode,
+                action=action,
+                split_dims=split_dims,
+            )
             refinements += 1
             any_refined = True
 
-            # --- BUG FIX: keep init_uids in sync with the (now-changed) partition ---
             if t in init_uids:
                 init_uids = (init_uids - {t}) | set(new_children)
-            # --------------------------------------------------------------------
+            report_progress()
 
         if not any_refined:
             ignored += 1
             if verbose:
                 print("[CEGAR] Spurious CE but every candidate target hit refinement limits. Ignoring.")
-            break
+            report_progress("refinement_limit")
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="refinement_limit",
+            )
 
         if checkpoint_every is not None and checkpoint_every > 0 and ((it + 1) % checkpoint_every == 0):
             _emit_checkpoint(it + 1)
 
-        # absys.rebuild_all_transitions()
-
     if verbose:
-        print(f"\n[CEGAR] Gave up after {it + 1} iteration(s) (max_iters={max_iters}).")
-    return CEGARResult(False, it + 1, last_cex, ignored, refinements)
+        print(
+            f"\n[CEGAR] Gave up after {iterations_completed} iteration(s) "
+            f"(max_iters={max_iters})."
+        )
+    report_progress("max_iters")
+    return CEGARResult(
+        False,
+        iterations_completed,
+        last_cex,
+        ignored,
+        refinements,
+        stopped=True,
+        stop_reason="max_iters",
+    )

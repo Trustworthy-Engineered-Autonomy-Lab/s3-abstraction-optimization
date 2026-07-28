@@ -1,4 +1,5 @@
 from __future__ import annotations
+from bisect import bisect_left, bisect_right
 import numpy as np
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Set, Tuple, Iterable, Callable
@@ -69,25 +70,37 @@ class RectPartition:
         self.roots = roots
         self._next_uid = next_uid
         self.leaves: Dict[int, CellNode] = {}
+        # Lazily inferred so legacy raw-Abstraction pickles remain loadable.
+        self._uniform_index_ready = False
+        self._uniform_root_edges = None
+        self._uniform_root_shape = None
         for r in roots:
             self._collect_leaves(r)
 
     @staticmethod
     def uniform_grid(domain: Rect, nx: int, ny: int, nz: int = 1) -> "RectPartition":
-        dx = (domain.xmax - domain.xmin) / nx
-        dy = (domain.ymax - domain.ymin) / ny
-        dz = (domain.zmax - domain.zmin) / nz if nz > 1 else 0.0
+        x_edges = np.linspace(domain.xmin, domain.xmax, nx + 1)
+        y_edges = np.linspace(domain.ymin, domain.ymax, ny + 1)
+        z_edges = (
+            np.linspace(domain.zmin, domain.zmax, nz + 1)
+            if nz > 1
+            else None
+        )
         uid = 0
         roots = []
         for i in range(nx):
             for j in range(ny):
                 for k in range(nz if nz > 1 else 1):
-                    zlo = domain.zmin + k * dz if nz > 1 else domain.zmin
-                    zhi = domain.zmin + (k+1)*dz if nz > 1 else domain.zmax
+                    zlo = z_edges[k] if z_edges is not None else domain.zmin
+                    zhi = (
+                        z_edges[k + 1]
+                        if z_edges is not None
+                        else domain.zmax
+                    )
                     r = Rect(
-                        domain.xmin + i*dx, domain.xmin + (i+1)*dx,
-                        domain.ymin + j*dy, domain.ymin + (j+1)*dy,
-                        zlo, zhi,
+                        float(x_edges[i]), float(x_edges[i + 1]),
+                        float(y_edges[j]), float(y_edges[j + 1]),
+                        float(zlo), float(zhi),
                     )
                     roots.append(CellNode(uid, r))
                     uid += 1
@@ -95,7 +108,9 @@ class RectPartition:
 
     def query_point(self, x, y, z=0.0) -> int:
         """Return uid of leaf containing (x, y, z)."""
-        for uid, node in self.leaves.items():
+        point_box = Rect(x, x, y, y, z, z)
+        for uid in self.query_intersecting_leaves(point_box):
+            node = self.leaves[uid]
             r = node.rect
             if (r.xmin <= x <= r.xmax and
                 r.ymin <= y <= r.ymax and
@@ -150,9 +165,109 @@ class RectPartition:
     def query_intersecting_leaves(self, box: Rect) -> List[int]:
         """Uses the partition tree itself as the spatial index."""
         out: List[int] = []
-        for r in self.roots:
-            self._query_node(r, box, out)
+        self._ensure_uniform_root_index()
+
+        edges = getattr(self, "_uniform_root_edges", None)
+        shape = getattr(self, "_uniform_root_shape", None)
+        if edges is None or shape is None:
+            for root in self.roots:
+                self._query_node(root, box, out)
+            return out
+
+        x_edges, y_edges, z_edges = edges
+        nx, ny, nz = shape
+        x_range = self._overlapping_root_range(
+            box.xmin, box.xmax, x_edges, nx
+        )
+        y_range = self._overlapping_root_range(
+            box.ymin, box.ymax, y_edges, ny
+        )
+        z_range = self._overlapping_root_range(
+            box.zmin, box.zmax, z_edges, nz
+        )
+        if x_range is None or y_range is None or z_range is None:
+            return out
+
+        for i in range(x_range[0], x_range[1] + 1):
+            for j in range(y_range[0], y_range[1] + 1):
+                base = (i * ny + j) * nz
+                for k in range(z_range[0], z_range[1] + 1):
+                    self._query_node(self.roots[base + k], box, out)
         return out
+
+    @staticmethod
+    def _overlapping_root_range(lo, hi, edges, count):
+        if lo != lo or hi != hi:
+            return (0, count - 1)
+        if hi < edges[0] or lo > edges[-1]:
+            return None
+        first = max(0, min(count - 1, bisect_left(edges, lo) - 1))
+        last = max(0, min(count - 1, bisect_right(edges, hi) - 1))
+        return (first, last)
+
+    def _ensure_uniform_root_index(self) -> None:
+        if getattr(self, "_uniform_index_ready", False):
+            return
+
+        self._uniform_index_ready = True
+        self._uniform_root_edges = None
+        self._uniform_root_shape = None
+        if not self.roots:
+            return
+
+        x_edges = sorted({
+            edge
+            for node in self.roots
+            for edge in (node.rect.xmin, node.rect.xmax)
+        })
+        y_edges = sorted({
+            edge
+            for node in self.roots
+            for edge in (node.rect.ymin, node.rect.ymax)
+        })
+        z_edges = sorted({
+            edge
+            for node in self.roots
+            for edge in (node.rect.zmin, node.rect.zmax)
+        })
+
+        nx = len(x_edges) - 1
+        ny = len(y_edges) - 1
+        nz = len(z_edges) - 1
+        if nx <= 0 or ny <= 0:
+            return
+        if nz <= 0:
+            z_value = self.roots[0].rect.zmin
+            z_edges = [z_value, z_value]
+            nz = 1
+        if nx * ny * nz != len(self.roots):
+            return
+
+        tolerance = 1e-12
+        for flat, node in enumerate(self.roots):
+            i = flat // (ny * nz)
+            remainder = flat % (ny * nz)
+            j = remainder // nz
+            k = remainder % nz
+            rect = node.rect
+            expected = (
+                x_edges[i], x_edges[i + 1],
+                y_edges[j], y_edges[j + 1],
+                z_edges[k], z_edges[k + 1],
+            )
+            actual = (
+                rect.xmin, rect.xmax,
+                rect.ymin, rect.ymax,
+                rect.zmin, rect.zmax,
+            )
+            if any(
+                abs(value - wanted) > tolerance
+                for value, wanted in zip(actual, expected)
+            ):
+                return
+
+        self._uniform_root_edges = (x_edges, y_edges, z_edges)
+        self._uniform_root_shape = (nx, ny, nz)
 
     def _query_node(self, node: CellNode, box: Rect, out: List[int]) -> None:
         if not node.rect.intersects(box):
@@ -210,6 +325,7 @@ class AffineDynamics:
 class Abstraction:
     # Absorbing state id for "out of bounds" transitions
     OUT_UID = -1
+    TRANSITION_SEMANTICS = "mountain-car-v3-aabb-v1"
 
     def __init__(
         self,
@@ -221,6 +337,24 @@ class Abstraction:
         self.dyn_by_action = dyn_by_action
         self.ap_labeler = ap_labeler
         self.tr = TransitionRelation()
+        self._domain_xy_bounds_cache = None
+        self._transition_source_recomputations_total = 0
+        self._full_transition_rebuilds_total = 0
+        self._incremental_transition_updates_total = 0
+
+    def _domain_xy_bounds(self) -> Tuple[float, float, float, float]:
+        """Return partition bounds, with lazy fallback for legacy pickles."""
+        cached = getattr(self, "_domain_xy_bounds_cache", None)
+        if cached is None:
+            roots = self.part.roots
+            cached = (
+                min(root.rect.xmin for root in roots),
+                max(root.rect.xmax for root in roots),
+                min(root.rect.ymin for root in roots),
+                max(root.rect.ymax for root in roots),
+            )
+            self._domain_xy_bounds_cache = cached
+        return cached
 
     def _ensure_out_state(self) -> None:
         self.tr.succ.setdefault(self.OUT_UID, {})
@@ -230,23 +364,53 @@ class Abstraction:
 
     def _compute_succs(self, u: int, a: str) -> Set[int]:
         """
-        Compute successor set for cell u under action a.
+        Compute successors using mountain-car-v3's AABB convention.
 
-        Calls dyn.image_bbox which returns List[Rect],get 
-        the union of intersecting leaves across all returned image boxes. If
-        none of the boxes overlap any partition cell, the cell maps to OUT.
+        Its ``searchsorted(..., side="right")`` rule assigns an image point
+        on an internal grid line to the cell on the right. Mountain Car's
+        physical dynamics clips/reset states into the domain, so OUT is used
+        only if an image has no in-domain overlap.
         """
+        self._transition_source_recomputations_total = (
+            getattr(self, "_transition_source_recomputations_total", 0) + 1
+        )
         node = self.part.leaves[u]
         dyn  = self.dyn_by_action[a]
         boxes: List[Rect] = dyn.image_bbox(node.rect)
         vs: Set[int] = set()
+        (
+            _domain_xmin,
+            domain_xmax,
+            _domain_ymin,
+            domain_ymax,
+        ) = self._domain_xy_bounds()
         for box in boxes:
-            vs |= set(self.part.query_intersecting_leaves(box))
+            for candidate in self.part.query_intersecting_leaves(box):
+                rect = self.part.leaves[candidate].rect
+                x_intersects = (
+                    rect.xmax > box.xmin
+                    or (
+                        rect.xmax == domain_xmax
+                        and box.xmin == domain_xmax
+                    )
+                ) and rect.xmin <= box.xmax
+                y_intersects = (
+                    rect.ymax > box.ymin
+                    or (
+                        rect.ymax == domain_ymax
+                        and box.ymin == domain_ymax
+                    )
+                ) and rect.ymin <= box.ymax
+                if x_intersects and y_intersects:
+                    vs.add(candidate)
         if not vs:
             vs = {self.OUT_UID}
         return vs
 
     def rebuild_all_transitions(self) -> None:
+        self._full_transition_rebuilds_total = (
+            getattr(self, "_full_transition_rebuilds_total", 0) + 1
+        )
         self.tr = TransitionRelation()
         self._ensure_out_state()
         for u in self.part.leaves:
@@ -254,6 +418,9 @@ class Abstraction:
                 self.tr.set_succ(u, a, self._compute_succs(u, a))
 
     def _update_after_split(self, leaf_uid: int, new_uids: Tuple[int, ...]) -> None:
+        self._incremental_transition_updates_total = (
+            getattr(self, "_incremental_transition_updates_total", 0) + 1
+        )
 
         # Clear outgoing edges of the split cell
         old_succ = self.tr.succ.get(leaf_uid, {})

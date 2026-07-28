@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from abstraction import Abstraction, Rect, AffineDynamics
 
@@ -242,6 +242,107 @@ def spot_get_counterexample_lasso(
     )
     return prefix, cycle
 
+
+def reach_avoid_get_counterexample_lasso(
+    absys: Abstraction,
+    init_uids: Set[int],
+    merge_actions: bool = True,
+) -> Optional[Tuple[List[int], List[int]]]:
+    """Find a counterexample to ``(!unsafe) U goal`` without Spot."""
+    label_cache: Dict[int, Set[str]] = {
+        absys.OUT_UID: set(absys.ap_labeler(None))
+    }
+
+    def labels(uid: int) -> Set[str]:
+        if uid not in label_cache:
+            node = absys.part.leaves.get(uid)
+            label_cache[uid] = (
+                set(absys.ap_labeler(node.rect))
+                if node is not None
+                else {"unsafe"}
+            )
+        return label_cache[uid]
+
+    def successors(uid: int) -> List[int]:
+        by_action = absys.tr.succ.get(uid, {})
+        merged: Set[int] = set()
+        for values in by_action.values():
+            merged |= values
+        return sorted(merged) if merged else [uid]
+
+    def is_goal(uid: int) -> bool:
+        return "goal" in labels(uid)
+
+    def is_bad(uid: int) -> bool:
+        return uid == absys.OUT_UID or "unsafe" in labels(uid)
+
+    def complete_bad_prefix_to_lasso(path: List[int]):
+        walk = list(path)
+        first_position = {uid: i for i, uid in enumerate(walk)}
+        while True:
+            nxt = successors(walk[-1])[0]
+            if nxt in first_position:
+                cycle_start = first_position[nxt]
+                return walk[:cycle_start], walk[cycle_start:]
+            first_position[nxt] = len(walk)
+            walk.append(nxt)
+
+    # Prefer a non-goal liveness cycle over OUT.  The legacy Spot parser
+    # filtered OUT from textual runs, so this ordering preserves the useful
+    # refinement behavior of the existing synthetic benchmark instead of
+    # immediately terminating on the first boundary cell.
+    first_bad_path: Optional[List[int]] = None
+    finished: Set[int] = set()
+    for initial in sorted(init_uids):
+        if initial != absys.OUT_UID and initial not in absys.part.leaves:
+            continue
+        if is_goal(initial):
+            continue
+        if is_bad(initial):
+            if first_bad_path is None:
+                first_bad_path = [initial]
+            continue
+        if initial in finished:
+            continue
+
+        stack_nodes: List[int] = [initial]
+        stack_iters = [iter(successors(initial))]
+        stack_position = {initial: 0}
+
+        while stack_nodes:
+            uid = stack_nodes[-1]
+            try:
+                nxt = next(stack_iters[-1])
+            except StopIteration:
+                finished.add(uid)
+                stack_position.pop(uid, None)
+                stack_nodes.pop()
+                stack_iters.pop()
+                continue
+
+            if is_goal(nxt):
+                continue
+            if is_bad(nxt):
+                if first_bad_path is None:
+                    first_bad_path = stack_nodes + [nxt]
+                continue
+            if nxt in stack_position:
+                cycle_start = stack_position[nxt]
+                return (
+                    list(stack_nodes[:cycle_start]),
+                    list(stack_nodes[cycle_start:]),
+                )
+            if nxt in finished:
+                continue
+
+            stack_position[nxt] = len(stack_nodes)
+            stack_nodes.append(nxt)
+            stack_iters.append(iter(successors(nxt)))
+
+    if first_bad_path is not None:
+        return complete_bad_prefix_to_lasso(first_bad_path)
+    return None
+
 # Validation 
 def expand_lasso(prefix: List[int], cycle: List[int], repeat_cycle_once: bool = True) -> List[int]:
     path = list(prefix) + list(cycle)
@@ -285,18 +386,9 @@ def _bbox_of_points(pts: np.ndarray) -> Rect:
 
 def _point_to_uid(absys: Abstraction, p: np.ndarray) -> int:
     x, y = float(p[0]), float(p[1])
-    z = float(p[2]) if len(p) > 2 else None
-    for uid, node in absys.part.leaves.items():
-        if uid == absys.OUT_UID:
-            continue
-        r = node.rect
-        if not (r.xmin <= x <= r.xmax and r.ymin <= y <= r.ymax):
-            continue
-        if z is not None and r.zmin != r.zmax:
-            if not (r.zmin <= z <= r.zmax):
-                continue
-        return uid
-    return absys.OUT_UID
+    z = float(p[2]) if len(p) > 2 else 0.0
+    uid = absys.part.query_point(x, y, z)
+    return uid if uid >= 0 else absys.OUT_UID
 
 
 def _infer_goal_ball_from_ap_labeler(absys: Abstraction, action: str = "step"):
@@ -309,237 +401,181 @@ def _infer_goal_ball_from_ap_labeler(absys: Abstraction, action: str = "step"):
         return c, r
 
     return np.array([5.0, 5.0], dtype=float), 1.0
+
+
+def _clip_polygon_to_rect(points: np.ndarray, rect: Rect) -> np.ndarray:
+    """Clip a convex 2-D polygon to an axis-aligned rectangle."""
+    polygon = [np.asarray(point, dtype=float) for point in points]
+
+    def clip(boundary_axis: int, bound: float, keep_greater: bool) -> None:
+        nonlocal polygon
+        if not polygon:
+            return
+        output = []
+        previous = polygon[-1]
+        previous_inside = (
+            previous[boundary_axis] >= bound
+            if keep_greater
+            else previous[boundary_axis] <= bound
+        )
+        for current in polygon:
+            current_inside = (
+                current[boundary_axis] >= bound
+                if keep_greater
+                else current[boundary_axis] <= bound
+            )
+            if current_inside != previous_inside:
+                denominator = (
+                    current[boundary_axis] - previous[boundary_axis]
+                )
+                if denominator != 0:
+                    fraction = (
+                        bound - previous[boundary_axis]
+                    ) / denominator
+                    output.append(
+                        previous + fraction * (current - previous)
+                    )
+            if current_inside:
+                output.append(current)
+            previous = current
+            previous_inside = current_inside
+        polygon = output
+
+    clip(0, rect.xmin, True)
+    clip(0, rect.xmax, False)
+    clip(1, rect.ymin, True)
+    clip(1, rect.ymax, False)
+    if not polygon:
+        return np.empty((0, 2), dtype=float)
+    return np.asarray(polygon, dtype=float)
+
+
 def validate_lasso_by_set_propagation(
     absys: Abstraction,
     prefix: List[int],
     cycle: List[int],
     action: str = "step",
     gt_cache_payload: Optional[dict] = None,
+    verbose: bool = False,
 ) -> ValidationResult:
+    """Validate a lasso using synthetic-v3's concrete cell semantics.
 
-    path = expand_lasso(
-        prefix,
-        cycle,
-        repeat_cycle_once=True,
-    )
-    print(
-        "[DEBUG] prefix=",
-        prefix,
-        "cycle=",
-        cycle,
-        "path=",
-        path,
-        flush=True,
-    )
+    First classify the initial cell exactly as synthetic-v3 does.  If it is
+    concretely safe, propagate its convex polygon along the lasso and refine
+    the first source whose abstract transition is infeasible.  A remaining
+    in-domain non-goal cycle is spurious for this contracting affine system,
+    so a cycle cell is refined.
+    """
+    del gt_cache_payload  # This benchmark uses the synthetic-v3 oracle below.
 
-    if len(path) == 0:
-        return ValidationResult(
-            True,
-            None,
-            None,
-            [],
+    path = expand_lasso(prefix, cycle, repeat_cycle_once=True)
+    if not path:
+        return ValidationResult(True, None, None, [])
+
+    u0 = path[0]
+    if u0 == absys.OUT_UID or u0 not in absys.part.leaves:
+        return ValidationResult(True, None, None, [])
+
+    dyn = absys.dyn_by_action[action]
+    rect = absys.part.leaves[u0].rect
+    oracle_points = _rect_corners(rect)
+
+    center = np.asarray(getattr(dyn, "xstar", [5.0, 5.0]), dtype=float)
+    radius = float(getattr(dyn, "goal_radius", 2.0))
+    radius_sq = radius * radius
+    xmin, xmax, ymin, ymax = absys._domain_xy_bounds()
+
+    for step in range(10_000):
+        hits_out = bool(
+            np.any(oracle_points[:, 0] < xmin)
+            or np.any(oracle_points[:, 0] > xmax)
+            or np.any(oracle_points[:, 1] < ymin)
+            or np.any(oracle_points[:, 1] > ymax)
         )
+        if hits_out:
+            if verbose:
+                print(
+                    f"[CEGAR] Concrete cell exits the domain at step {step}.",
+                    flush=True,
+                )
+            return ValidationResult(True, None, None, [])
 
+        displacement = oracle_points[:, :2] - center[None, :2]
+        if bool(np.all(np.sum(displacement * displacement, axis=1) <= radius_sq)):
+            if verbose:
+                print(
+                    f"[CEGAR] Counterexample is spurious; all initial-cell "
+                    f"corners reach goal at step {step}.",
+                    flush=True,
+                )
+            break
 
-    ###################################################################
-    # Unicycle GT-cache validation
-    ###################################################################
-
-    if gt_cache_payload is not None:
-
-        from gt_cache import (
-            first_path_uid_overlapping_unsafe,
-            path_is_fully_gt_safe,
+        oracle_points = np.asarray(
+            [dyn.dynamics(point) for point in oracle_points],
+            dtype=float,
         )
-
-        path_safe = path_is_fully_gt_safe(
-            absys,
-            path,
-            gt_cache_payload,
-        )
-
-        first_unsafe = first_path_uid_overlapping_unsafe(
-            absys,
-            path,
-            gt_cache_payload,
-        )
-
-        print(
-            f"[GT] path_safe={path_safe} first_unsafe={first_unsafe}",
-            flush=True,
-        )
-
-        if path_safe:
-
-            return ValidationResult(
-                True,
-                None,
-                None,
-                [],
-            )
-
-        return ValidationResult(
-            False,
-            0,
-            first_unsafe,
-            [],
-        )
-
-
-    ###################################################################
-    # Synthetic affine validation
-    ###################################################################
-
-    #
-    # IMPORTANT:
-    #
-    # Check liveness first.
-    #
-    # A cycle that never reaches goal is the abstract counterexample.
-    # We must refine it even if the abstract transition is locally feasible.
-    #
-
-    if len(cycle) > 0:
-
-    #
-    # A cycle is only a violation if it can repeat forever WITHOUT
-    # ever reaching goal.
-    #
-
-        cycle_has_goal = False
-
-        for uid in cycle:
-
-            if uid == absys.OUT_UID:
-                continue
-
-            labels = absys.ap_labeler(
-                absys.part.leaves[uid].rect
-            )
-
-            if "goal" in labels:
-                cycle_has_goal = True
-                break
-
-
-        if cycle_has_goal:
-
+    else:
+        if verbose:
             print(
-                "[CEGAR] Cycle reaches goal; ignoring lasso.",
+                "[CEGAR] Concrete check timed out; retaining the "
+                "counterexample.",
                 flush=True,
             )
+        return ValidationResult(True, None, None, [])
 
-            #
-            # This counterexample is invalid, but we still need to
-            # provide a cell to refine because the abstraction produced
-            # the bad lasso.
-            #
-            refine_uid = cycle[0]
+    # The initial cell is concretely safe, so this lasso must be spurious.
+    # Locate the earliest infeasible abstract transition using exact affine
+    # polygon propagation and rectangle clipping.
+    polygon = _rect_corners(rect)
+    trace: List[Rect] = [_bbox_of_points(polygon)]
+    for index in range(len(path) - 1):
+        source_uid = path[index]
+        target_uid = path[index + 1]
+        if source_uid == absys.OUT_UID:
+            return ValidationResult(False, index, u0, trace)
 
-            return ValidationResult(
-                False,
-                0,
-                refine_uid,
-                [],
-            )
-
-
-    #
-    # No goal in cycle -> spurious abstract liveness violation
-    #
-
-    refine_uid = cycle[0]
-
-    print(
-        "[CEGAR] Spurious non-goal cycle at uid=",
-        refine_uid,
-        flush=True,
-    )
-
-    return ValidationResult(
-        False,
-        0,
-        refine_uid,
-        [],
-    )
-
-    ###################################################################
-    # Transition feasibility validation
-    ###################################################################
-
-    for i in range(len(path)-1):
-
-        uid = path[i]
-        next_uid = path[i+1]
-
-
-        if uid == absys.OUT_UID:
-            continue
-
-
-        if uid not in absys.part.leaves:
-            continue
-
-
-        if next_uid not in absys.part.leaves:
-            continue
-
-
-        current_rect = absys.part.leaves[uid].rect
-
-        next_rect = absys.part.leaves[next_uid].rect
-
-
-        dyn = absys.dyn_by_action[action]
-
-
-        reachable_boxes = dyn.image_bbox(
-            current_rect
+        polygon = np.asarray(
+            [dyn.dynamics(point) for point in polygon],
+            dtype=float,
         )
-
-
-        feasible = False
-
-
-        for box in reachable_boxes:
-
-            if rect_intersection(
-                box,
-                next_rect,
-            ) is not None:
-
-                feasible = True
-                break
-
-
-        if not feasible:
-
-            print(
-                "[CEGAR] Spurious transition:",
-                uid,
-                "->",
-                next_uid,
-                flush=True,
+        if target_uid == absys.OUT_UID:
+            polygon_hits_out = bool(
+                np.any(polygon[:, 0] < xmin)
+                or np.any(polygon[:, 0] > xmax)
+                or np.any(polygon[:, 1] < ymin)
+                or np.any(polygon[:, 1] > ymax)
             )
-
+            if polygon_hits_out:
+                return ValidationResult(True, None, None, trace)
             return ValidationResult(
                 False,
-                i,
-                uid,
-                [],
+                index,
+                source_uid,
+                trace,
             )
 
+        target = absys.part.leaves.get(target_uid)
+        if target is None:
+            return ValidationResult(False, index, source_uid, trace)
+        polygon = _clip_polygon_to_rect(polygon, target.rect)
+        if len(polygon) == 0:
+            return ValidationResult(
+                False,
+                index,
+                source_uid,
+                trace,
+            )
+        trace.append(_bbox_of_points(polygon))
 
-    ###################################################################
-    # No spurious behavior found
-    ###################################################################
-
-    return ValidationResult(
-        True,
-        None,
-        None,
-        [],
+    refine_uid = next(
+        (
+            uid
+            for uid in cycle
+            if uid != absys.OUT_UID and uid in absys.part.leaves
+        ),
+        u0,
     )
+    return ValidationResult(False, len(path) - 1, refine_uid, trace)
 # Refinement
 
 def split_midpoint(absys: Abstraction, leaf_uid: int) -> Tuple[int, int, int, int]:
@@ -662,12 +698,17 @@ def split_cell(
     leaf_uid: int,
     mode: str = "auto",
     action: str = "step",
+    split_dims: Optional[Tuple[bool, bool, bool]] = None,
 ) -> Tuple[int, ...]:
 
     node = absys.part.leaves[leaf_uid]
     r = node.rect
 
-    split_x, split_y, split_z = choose_split_dims(absys, leaf_uid, mode=mode, action=action)
+    if split_dims is None:
+        split_dims = choose_split_dims(
+            absys, leaf_uid, mode=mode, action=action
+        )
+    split_x, split_y, split_z = split_dims
 
     xm = 0.5 * (r.xmin + r.xmax) if split_x else None
     ym = 0.5 * (r.ymin + r.ymax) if split_y else None
@@ -716,6 +757,8 @@ class CEGARResult:
     last_cex: Optional[Tuple[List[int], List[int]]]
     ignored_counterexamples: int
     refinements: int
+    stopped: bool = False
+    stop_reason: Optional[str] = None
 
 
 def run_cegar(
@@ -732,6 +775,12 @@ def run_cegar(
     split_mode: str = "auto",
     verbose: bool = True,
     gt_cache_payload: Optional[dict] = None,
+    counterexample_backend: str = "auto",
+    stop_requested: Optional[Callable[[], bool]] = None,
+    max_total_states: Optional[int] = None,
+    progress_callback: Optional[
+        Callable[[Abstraction, dict], None]
+    ] = None,
 ) -> CEGARResult:
     """
     Full CEGAR loop:
@@ -758,10 +807,17 @@ def run_cegar(
         # original phi value
         phi = absys.reach_avoid_ltl(goal_ap="goal", unsafe_ap="unsafe")
 
+    if counterexample_backend not in {"auto", "graph", "spot"}:
+        raise ValueError(
+            "counterexample_backend must be 'auto', 'graph', or 'spot'"
+        )
+    if max_total_states is not None and max_total_states <= 0:
+        raise ValueError("max_total_states must be positive or None")
 
     refinements = 0
     ignored = 0
     last_cex: Optional[Tuple[List[int], List[int]]] = None
+    iterations_completed = 0
 
     # Local, mutable copy -- we update this after every split so that stale
     init_uids = set(init_uids)
@@ -771,32 +827,108 @@ def run_cegar(
     if not absys.tr.succ:
         absys.rebuild_all_transitions()
 
+    def report_progress(stop_reason: Optional[str] = None) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(
+            absys,
+            {
+                "iterations": iterations_completed,
+                "refinements": refinements,
+                "ignored_counterexamples": ignored,
+                "current_total_states": len(absys.part.leaves),
+                "max_total_states": max_total_states,
+                "stop_reason": stop_reason,
+            },
+        )
+
     for it in range(max_iters):
+        if (
+            max_total_states is not None
+            and len(absys.part.leaves) >= max_total_states
+        ):
+            report_progress("state_limit")
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="state_limit",
+            )
+        if stop_requested is not None and stop_requested():
+            report_progress("external_stop")
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="external_stop",
+            )
+
         if verbose:
             print(f"\n[CEGAR] Iter {it}: checking phi = {phi}")
 
-        cex = spot_get_counterexample_lasso(absys, init_uids, phi, merge_actions=merge_actions)
+        normalized_phi = "".join(phi.split())
+        use_graph = (
+            counterexample_backend == "graph"
+            or (
+                counterexample_backend == "auto"
+                and normalized_phi in {
+                    "(!unsafe)Ugoal",
+                    "G!unsafe&Fgoal",
+                }
+            )
+        )
+        if use_graph:
+            cex = reach_avoid_get_counterexample_lasso(
+                absys, init_uids, merge_actions=merge_actions
+            )
+        else:
+            cex = spot_get_counterexample_lasso(
+                absys, init_uids, phi, merge_actions=merge_actions
+            )
         if cex is None:
             if verbose:
                 print("[CEGAR] VERIFIED (no abstract counterexample).")
-            return CEGARResult(True, it, None, ignored, refinements)
+            report_progress("verified")
+            return CEGARResult(
+                True, iterations_completed, None, ignored, refinements
+            )
 
         prefix, cycle = cex
         last_cex = cex
+        iterations_completed += 1
         if verbose:
             print("[CEGAR] Abstract counterexample found.")
             print("  prefix:", prefix)
             print("  cycle :", cycle)
 
         # Validate
-        print("[DEBUG] validating lasso...", flush=True)
-        vr = validate_lasso_by_set_propagation(absys, prefix, cycle, action=action, gt_cache_payload=gt_cache_payload)
-        print(f"[DEBUG] validator result = {vr}", flush=True) # , gt_cache_payload=gt_cache_payload
+        vr = validate_lasso_by_set_propagation(
+            absys,
+            prefix,
+            cycle,
+            action=action,
+            gt_cache_payload=gt_cache_payload,
+            verbose=verbose,
+        )
         if vr.feasible:
             if verbose:
                 print("[CEGAR] Found CONCRETE-feasible counterexample at current precision.")
                 print("[CEGAR] NOT VERIFIED.")
-            return CEGARResult(False, it + 1, last_cex, ignored, refinements)
+            report_progress("feasible_counterexample")
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stop_reason="feasible_counterexample",
+            )
 
         # Spurious -> refine
         uid = vr.refine_uid
@@ -804,7 +936,16 @@ def run_cegar(
             ignored += 1
             if verbose:
                 print("[CEGAR] Spurious CE but no valid refine uid. Ignoring.")
-            break
+            report_progress("unrefinable_counterexample")
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="unrefinable_counterexample",
+            )
 
         if not can_refine(absys, uid, min_cell_width, min_cell_height, max_refine_depth,
                            min_depth_theta=min_cell_theta):
@@ -814,13 +955,49 @@ def run_cegar(
                 d = node.depth if node else None
                 print(f"[CEGAR] Spurious but uid={uid} hit refinement limits (depth={d}). Ignoring CE.")
 
-            break
+            report_progress("refinement_limit")
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="refinement_limit",
+            )
 
         if verbose:
             print(f"[CEGAR] Spurious. Refining uid={uid} (iter {it}, mode={split_mode}).")
 
-        new_children = split_cell(absys, uid, mode=split_mode, action=action)
-        absys.rebuild_all_transitions()
+        split_dims = choose_split_dims(
+            absys, uid, mode=split_mode, action=action
+        )
+        child_count = 2 ** sum(bool(value) for value in split_dims)
+        prospective_leaf_count = (
+            len(absys.part.leaves) - 1 + child_count
+        )
+        if (
+            max_total_states is not None
+            and prospective_leaf_count > max_total_states
+        ):
+            report_progress("state_limit")
+            return CEGARResult(
+                False,
+                iterations_completed,
+                last_cex,
+                ignored,
+                refinements,
+                stopped=True,
+                stop_reason="state_limit",
+            )
+
+        new_children = split_cell(
+            absys,
+            uid,
+            mode=split_mode,
+            action=action,
+            split_dims=split_dims,
+        )
         refinements += 1
 
         # --- BUG FIX: keep init_uids in sync with the (now-changed) partition ---
@@ -828,8 +1005,20 @@ def run_cegar(
             init_uids = (init_uids - {uid}) | set(new_children)
         # --------------------------------------------------------------------
 
-        # absys.rebuild_all_transitions()
+        report_progress()
 
     if verbose:
-        print(f"\n[CEGAR] Gave up after {it + 1} iteration(s) (max_iters={max_iters}).")
-    return CEGARResult(False, it + 1, last_cex, ignored, refinements)
+        print(
+            f"\n[CEGAR] Gave up after {iterations_completed} iteration(s) "
+            f"(max_iters={max_iters})."
+        )
+    report_progress("max_iters")
+    return CEGARResult(
+        False,
+        iterations_completed,
+        last_cex,
+        ignored,
+        refinements,
+        stopped=True,
+        stop_reason="max_iters",
+    )

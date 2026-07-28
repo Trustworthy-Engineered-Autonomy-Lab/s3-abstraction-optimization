@@ -133,3 +133,17 @@ Run this from `cegar/unicycle` so the pickle can resolve the local modules:
 `a.part.leaves` maps current cell IDs to their nested `CellNode` objects.
 `a.tr.succ[uid]["step"]` is the set of successor cell IDs; `a.tr.pred` is the
 reverse relation. Cell ID `-1` is the absorbing out-of-domain state.
+
+## Evaluate saved models with pyModelChecking
+
+```powershell
+.\.venv\Scripts\python.exe `
+  .\cegar\unicycle\evaluate_saved_abstractions.py
+```
+
+With no positional arguments, this evaluates both standard saved artifacts
+using unicycle-taylor's CTL property `A (safe U goal)`, initial theta region,
+and fixed 99x99x99 ground truth. Pass one or more checkpoint paths to
+evaluate only those files. Each result is written beside its checkpoint as
+`*.pymodelchecking.json`; the `model_checking_time_sec` field times only
+`CTL.modelcheck(...)`.

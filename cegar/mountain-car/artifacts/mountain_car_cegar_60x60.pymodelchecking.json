@@ -1,0 +1,27 @@
+{
+  "case_study": "mountain-car",
+  "checkpoint": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\mountain-car\\artifacts\\mountain_car_cegar_60x60.pkl",
+  "ground_truth": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\mountain-car-v3\\mc_reach_regions.pkl",
+  "initial_states": 4900,
+  "kripke_construction_time_sec": 0.020777600002475083,
+  "model_checking_time_sec": 0.15208939998410642,
+  "property": "A F goal",
+  "recall": 0.12972222222222235,
+  "recall_details": {
+    "ground_truth_goal_partition_cells": 4900,
+    "ground_truth_goal_volume": 0.252,
+    "gt_fixed_grid_label_counts": {
+      "goal": 10000
+    },
+    "gt_nx": 100,
+    "gt_ny": 100,
+    "initial_partition_cells": 4900,
+    "recall": 0.12972222222222235,
+    "verified_ground_truth_goal_partition_cells": 467,
+    "verified_ground_truth_goal_volume": 0.03269000000000003
+  },
+  "reference": "mountain-car-v3",
+  "satisfying_initial_states": 467,
+  "states": 4901,
+  "transitions": 81653
+}

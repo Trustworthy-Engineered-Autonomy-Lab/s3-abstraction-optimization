@@ -53,7 +53,7 @@ def collect_data(fname):
     horizons = [1, 2, 3, 4, 5]
 
     # Instantiate random parameters
-    num_samples = 100
+    num_samples = 30
     key = jax.random.PRNGKey(0)
     n_cols = abstraction_shape[0] + abstraction_shape[1] + abstraction_shape[1]
     param_array = 2.0 * jax.random.normal(key, shape=(num_samples, n_cols))
@@ -372,7 +372,7 @@ if __name__ == "__main__":
 
     case_study_dir = Path(__file__).resolve().parent
 
-    fname = case_study_dir / "proxy_analysis_data_10.pkl"
+    fname = case_study_dir / "proxy_analysis_data_01.pkl"
 
     # collect_data(fname)
 

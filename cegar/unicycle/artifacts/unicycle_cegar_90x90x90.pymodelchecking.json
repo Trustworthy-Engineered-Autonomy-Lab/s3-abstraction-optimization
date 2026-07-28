@@ -1,0 +1,29 @@
+{
+  "case_study": "unicycle",
+  "checkpoint": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\unicycle\\artifacts\\unicycle_cegar_90x90x90.pkl",
+  "ground_truth": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\unicycle-taylor\\unicycle_gt_reach_regions_100.pkl",
+  "initial_states": 194400,
+  "kripke_construction_time_sec": 5.3552313999971375,
+  "model_checking_time_sec": 10.88194430002477,
+  "property": "A (safe U goal)",
+  "recall": 0.7582037435548139,
+  "recall_details": {
+    "ground_truth_goal_partition_cells": 123145,
+    "ground_truth_goal_volume": 2653.439144892859,
+    "gt_fixed_grid_label_counts": {
+      "fail": 392457,
+      "goal": 577842
+    },
+    "gt_ntheta": 99,
+    "gt_nx": 99,
+    "gt_ny": 99,
+    "initial_partition_cells": 194400,
+    "recall": 0.7582037435548139,
+    "verified_ground_truth_goal_partition_cells": 93369,
+    "verified_ground_truth_goal_volume": 2011.84749295265
+  },
+  "reference": "unicycle-taylor",
+  "satisfying_initial_states": 105014,
+  "states": 754605,
+  "transitions": 7214863
+}

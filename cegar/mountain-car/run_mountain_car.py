@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Timed, resumable CEGAR runner for the 2-D synthetic benchmark."""
+"""Timed, resumable CEGAR runner for the 2-D Mountain Car benchmark."""
 from __future__ import annotations
 
 import argparse
@@ -16,29 +16,30 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(errors="replace")
 
-from abstraction import (
-    Abstraction,
-    Rect,
-    compute_verified_set_via_fixpoint,
-)
-from cegar_loop import CEGARResult, run_cegar
-from synthetic_benchmark import (
+from abstraction import Abstraction, Rect
+import cegar_loop_mc
+from cegar_loop_mc import CEGARResult, run_cegar
+import main_mountain_car_model_checking as mc
+from mountain_car_benchmark import (
     DOMAIN,
     FORMULA,
+    INITIAL_DOMAIN,
     build_abstraction,
-    compute_synthetic_v3_recall,
+    compute_v3_recall,
+    compute_verified_set_via_fixpoint,
+    rect_area,
 )
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ARTIFACT_DIR = SCRIPT_DIR / "artifacts"
-SYNTHETIC_V3_GT = (
+MOUNTAIN_CAR_V3_GT = (
     SCRIPT_DIR.parents[1]
-    / "synthetic-v3"
-    / "synthetic_reach_regions.pkl"
+    / "mountain-car-v3"
+    / "mc_reach_regions.pkl"
 )
-CHECKPOINT_VERSION = 2
-CEGAR_SEMANTICS = "synthetic-v3-cell-oracle-v1"
+CHECKPOINT_VERSION = 1
+CEGAR_SEMANTICS = "mountain-car-v3-corners-cycle-v1"
 STOP_REQUESTED = False
 
 
@@ -62,11 +63,9 @@ for _signal_name in ("SIGTERM", "SIGINT", "SIGUSR1"):
 
 
 def default_checkpoint_path(grid_size: int) -> Path:
-    return ARTIFACT_DIR / f"synthetic_cegar_{grid_size}x{grid_size}.pkl"
-
-
-def default_gt_reach_regions_path() -> Path:
-    return SYNTHETIC_V3_GT
+    return ARTIFACT_DIR / (
+        f"mountain_car_cegar_{grid_size}x{grid_size}.pkl"
+    )
 
 
 def default_summary_path(checkpoint_path: Path) -> Path:
@@ -81,13 +80,14 @@ def save_model_checkpoint(
     metadata: Optional[dict] = None,
     verified: Optional[set[int]] = None,
 ) -> Path:
-    """Atomically save cells, cell IDs, transitions, and run metadata."""
+    """Atomically save cells, IDs, transitions, and run metadata."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "checkpoint_version": CHECKPOINT_VERSION,
         "absys": absys,
         "domain": domain,
+        "phi": FORMULA,
         "metadata": dict(metadata or {}),
         "saved_wall_time": time.time(),
         "saved_monotonic": time.monotonic(),
@@ -99,10 +99,10 @@ def save_model_checkpoint(
             "refuted": set(),
         }
 
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with tmp_path.open("wb") as stream:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with temporary_path.open("wb") as stream:
         pickle.dump(payload, stream, protocol=pickle.HIGHEST_PROTOCOL)
-    tmp_path.replace(path)
+    temporary_path.replace(path)
     print(
         f"[CHECKPOINT] saved {len(absys.part.leaves)} leaves and "
         f"{len(absys.tr.succ)} transition sources to {path}",
@@ -111,15 +111,25 @@ def save_model_checkpoint(
     return path
 
 
+def _load_pickle_compatibility(path: Path):
+    """Load old pickles that recorded classes under __main__/cegar_loop."""
+    sys.modules.setdefault("cegar_loop", cegar_loop_mc)
+    main_module = sys.modules.get("__main__")
+    if main_module is not None:
+        setattr(main_module, "MountainCarDynamics", mc.MountainCarDynamics)
+        setattr(main_module, "ap_labeler", mc.ap_labeler)
+    with path.open("rb") as stream:
+        return pickle.load(stream)
+
+
 def load_model_checkpoint(
     path: str | Path,
 ) -> Tuple[Abstraction, Rect, dict]:
-    """Load either a new dict checkpoint or the legacy raw Abstraction."""
+    """Load a production checkpoint or a supplied legacy abstraction."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Model checkpoint does not exist: {path}")
-    with path.open("rb") as stream:
-        payload = pickle.load(stream)
+    payload = _load_pickle_compatibility(path)
 
     if isinstance(payload, Abstraction):
         absys = payload
@@ -136,7 +146,8 @@ def load_model_checkpoint(
             metadata = {"raw_metadata": repr(metadata)}
     else:
         raise ValueError(
-            f"{path} is neither a raw synthetic Abstraction nor a checkpoint."
+            f"{path} is neither a raw Mountain Car Abstraction nor a "
+            "checkpoint."
         )
 
     print(f"[LOAD] checkpoint: {path}", flush=True)
@@ -160,18 +171,26 @@ def abstraction_grid_shape(absys: Abstraction) -> Tuple[int, int]:
 def transition_stats(absys: Abstraction, *, validate: bool = True) -> dict:
     valid_uids = set(absys.part.leaves)
     valid_uids.add(absys.OUT_UID)
-    missing = [uid for uid in absys.part.leaves if uid not in absys.tr.succ]
+    missing = [
+        uid
+        for uid in absys.part.leaves
+        if uid not in absys.tr.succ
+    ]
     dangling = 0
     edge_count = 0
     for by_action in absys.tr.succ.values():
         for destinations in by_action.values():
             edge_count += len(destinations)
             if validate:
-                dangling += sum(dst not in valid_uids for dst in destinations)
+                dangling += sum(
+                    destination not in valid_uids
+                    for destination in destinations
+                )
     if validate and (missing or dangling):
         raise ValueError(
             "Incomplete transition relation: "
-            f"missing_sources={len(missing)}, dangling_edges={dangling}."
+            f"missing_sources={len(missing)}, "
+            f"dangling_edges={dangling}."
         )
     return {
         "leaf_count": len(absys.part.leaves),
@@ -182,29 +201,59 @@ def transition_stats(absys: Abstraction, *, validate: bool = True) -> dict:
     }
 
 
+def transition_work_counters(absys: Abstraction) -> dict:
+    """Return persistent counters for auditing transition construction."""
+    return {
+        "transition_source_recomputations_total": int(
+            getattr(
+                absys,
+                "_transition_source_recomputations_total",
+                0,
+            )
+        ),
+        "full_transition_rebuilds_total": int(
+            getattr(absys, "_full_transition_rebuilds_total", 0)
+        ),
+        "incremental_transition_updates_total": int(
+            getattr(absys, "_incremental_transition_updates_total", 0)
+        ),
+    }
+
+
+def transition_counter_delta(after: dict, before: dict) -> dict:
+    return {
+        f"cegar_{key}": int(after.get(key, 0)) - int(before.get(key, 0))
+        for key in after
+    }
+
+
 def ensure_current_transition_semantics(
     absys: Abstraction,
     metadata: Optional[dict] = None,
 ) -> bool:
-    """Rebuild legacy transition graphs using synthetic-v3 semantics."""
     current = getattr(absys, "TRANSITION_SEMANTICS", None)
     recorded = (metadata or {}).get("transition_semantics")
     if recorded == current:
         return False
     print(
-        "[TRANSITIONS] rebuilding with synthetic-v3 AABB and mixed-OUT "
+        "[TRANSITIONS] rebuilding with mountain-car-v3 Taylor/AABB "
         "semantics...",
         flush=True,
     )
+    start = time.monotonic()
     absys.rebuild_all_transitions()
+    print(
+        f"[TRANSITIONS] rebuild completed in "
+        f"{time.monotonic() - start:.3f}s",
+        flush=True,
+    )
     return True
 
 
 def load_gt_reach_regions(path: Path) -> dict:
-    """Load synthetic-v3's fixed 100x100 goal/fail reference."""
     if not path.exists():
         raise FileNotFoundError(
-            f"synthetic-v3 ground truth does not exist: {path}"
+            f"mountain-car-v3 ground truth does not exist: {path}"
         )
     with path.open("rb") as stream:
         regions = pickle.load(stream)
@@ -219,14 +268,14 @@ def load_gt_reach_regions(path: Path) -> dict:
         )
     ):
         raise ValueError(
-            f"{path} is not a synthetic-v3 reach-region dictionary."
+            f"{path} is not a mountain-car-v3 reach-region dictionary."
         )
     counts = {}
     for label in regions.values():
         counts[label] = counts.get(label, 0) + 1
     print(
-        f"[GT] loaded {len(regions)} synthetic-v3 cells from {path}: "
-        f"{counts}",
+        f"[GT] loaded {len(regions)} mountain-car-v3 cells from "
+        f"{path}: {counts}",
         flush=True,
     )
     return regions
@@ -246,19 +295,19 @@ def evaluate(
         flush=True,
     )
 
-    gt_reach_regions = load_gt_reach_regions(gt_reach_regions_path)
-    recall_details = compute_synthetic_v3_recall(
+    regions = load_gt_reach_regions(gt_reach_regions_path)
+    recall_details = compute_v3_recall(
         absys,
         verified,
-        gt_reach_regions,
-        initial_domain=DOMAIN,
+        regions,
+        initial_domain=INITIAL_DOMAIN,
     )
     result = {
         "verified_cells": len(verified),
         "unknown_cells": len(absys.part.leaves) - len(verified),
         "verification_elapsed_sec": verification_elapsed,
-        "recall_definition": "synthetic-v3-volume",
-        "recall_gt_safe_volume": recall_details["recall"],
+        "recall_definition": "mountain-car-v3-volume",
+        "recall_gt_goal_volume": recall_details["recall"],
         "gt_reach_regions": str(gt_reach_regions_path),
         **{
             key: value
@@ -284,25 +333,21 @@ def refine_unknown_cells(
     progress_callback: Callable[[Abstraction, dict], None],
     completed_candidate_uids: set[int],
 ) -> dict:
-    """Mirror the unicycle workflow: one bounded CEGAR run per unknown cell."""
-    def area(uid: int) -> float:
-        rect = absys.part.leaves[uid].rect
-        return float(
-            (rect.xmax - rect.xmin) * (rect.ymax - rect.ymin)
-        )
-
     candidates = [
         uid
         for uid in unknown_uids
         if uid in absys.part.leaves
         and uid not in completed_candidate_uids
     ]
-    candidates.sort(key=lambda uid: (-area(uid), uid))
+    candidates.sort(
+        key=lambda uid: (-rect_area(absys.part.leaves[uid].rect), uid)
+    )
 
     total_refinements = 0
     total_iterations = 0
     total_ignored = 0
     verified_runs = 0
+    feasible_runs = 0
     unrefinable_runs = 0
     processed = 0
     stop_reason = None
@@ -319,7 +364,7 @@ def refine_unknown_cells(
         if stop_requested():
             stop_reason = "external_stop"
             break
-        if index % 200 == 0:
+        if index % 100 == 0:
             print(
                 f"  [refine] {index}/{len(candidates)} "
                 f"leaves={len(absys.part.leaves)} "
@@ -332,6 +377,32 @@ def refine_unknown_cells(
             processed += 1
             continue
 
+        def cell_progress(absys_cb: Abstraction, progress: dict) -> None:
+            combined = {
+                "processed": processed,
+                "ordered_total": len(candidates),
+                "refinements": (
+                    total_refinements
+                    + int(progress.get("refinements", 0))
+                ),
+                "iterations": (
+                    total_iterations
+                    + int(progress.get("iterations", 0))
+                ),
+                "ignored_counterexamples": (
+                    total_ignored
+                    + int(progress.get("ignored_counterexamples", 0))
+                ),
+                "completed_candidate_uids": completed_candidate_uids,
+                "completed_candidate_count": len(
+                    completed_candidate_uids
+                ),
+                "current_total_states": len(absys_cb.part.leaves),
+                "max_total_states": max_total_states,
+                "stop_reason": progress.get("stop_reason"),
+            }
+            progress_callback(absys_cb, combined)
+
         result = run_cegar(
             absys,
             {uid},
@@ -342,10 +413,12 @@ def refine_unknown_cells(
             min_cell_height=min_cell_size,
             max_refine_depth=max_refine_depth,
             split_mode=split_mode,
+            prefer_cycle_refine=True,
             verbose=False,
             counterexample_backend=counterexample_backend,
             stop_requested=stop_requested,
             max_total_states=max_total_states,
+            progress_callback=cell_progress,
         )
         processed += 1
         total_refinements += result.refinements
@@ -353,7 +426,12 @@ def refine_unknown_cells(
         total_ignored += result.ignored_counterexamples
         if result.verified:
             verified_runs += 1
-        if result.stop_reason == "unrefinable_counterexample":
+        if result.stop_reason == "feasible_counterexample":
+            feasible_runs += 1
+        if result.stop_reason in {
+            "unrefinable_counterexample",
+            "refinement_limit",
+        }:
             unrefinable_runs += 1
 
         resource_stop = result.stop_reason in {
@@ -370,6 +448,7 @@ def refine_unknown_cells(
             "iterations": total_iterations,
             "ignored_counterexamples": total_ignored,
             "verified_cell_runs": verified_runs,
+            "feasible_counterexample_runs": feasible_runs,
             "unrefinable_cell_runs": unrefinable_runs,
             "completed_candidate_uids": completed_candidate_uids,
             "completed_candidate_count": len(completed_candidate_uids),
@@ -378,7 +457,6 @@ def refine_unknown_cells(
             "stop_reason": result.stop_reason if resource_stop else None,
         }
         progress_callback(absys, progress)
-
         if resource_stop:
             stop_reason = result.stop_reason
             break
@@ -398,6 +476,7 @@ def refine_unknown_cells(
         "iterations": total_iterations,
         "ignored_counterexamples": total_ignored,
         "verified_cell_runs": verified_runs,
+        "feasible_counterexample_runs": feasible_runs,
         "unrefinable_cell_runs": unrefinable_runs,
         "completed_candidate_uids": completed_candidate_uids,
         "completed_candidate_count": len(completed_candidate_uids),
@@ -426,8 +505,8 @@ def write_summary(path: Path, summary: dict) -> None:
         return repr(value)
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_path.write_text(
         json.dumps(
             summary,
             indent=2,
@@ -436,14 +515,14 @@ def write_summary(path: Path, summary: dict) -> None:
         ) + "\n",
         encoding="utf-8",
     )
-    tmp_path.replace(path)
+    temporary_path.replace(path)
     print(f"[SUMMARY] wrote {path}", flush=True)
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "Build/resume the synthetic abstraction, run bounded CEGAR, "
+            "Build/resume the Mountain Car abstraction, run bounded CEGAR, "
             "save the complete model, and compute final recall."
         )
     )
@@ -457,12 +536,23 @@ def parse_args(argv=None):
     parser.add_argument(
         "--resume-from",
         type=Path,
-        help="Seed a missing output checkpoint from this new or legacy pickle.",
+        help="Seed a missing output checkpoint from a legacy/new pickle.",
     )
     parser.add_argument(
         "--fresh",
         action="store_true",
-        help="Ignore existing checkpoints and build a fresh uniform model.",
+        help=(
+            "Build a fresh uniform model (also the default when no resume "
+            "option is supplied)."
+        ),
+    )
+    parser.add_argument(
+        "--resume-existing",
+        action="store_true",
+        help=(
+            "Explicitly resume --checkpoint. Existing output checkpoints "
+            "are never resumed implicitly."
+        ),
     )
     parser.add_argument(
         "--time-limit-sec",
@@ -472,7 +562,9 @@ def parse_args(argv=None):
     parser.add_argument(
         "--safety-margin-sec",
         type=float,
-        default=float(os.environ.get("TIME_LIMIT_SAFETY_MARGIN_SEC", 0)),
+        default=float(
+            os.environ.get("TIME_LIMIT_SAFETY_MARGIN_SEC", 0)
+        ),
     )
     parser.add_argument(
         "--max-total-states",
@@ -482,7 +574,9 @@ def parse_args(argv=None):
     parser.add_argument(
         "--checkpoint-interval-sec",
         type=float,
-        default=float(os.environ.get("CHECKPOINT_INTERVAL_SEC", 15 * 60)),
+        default=float(
+            os.environ.get("CHECKPOINT_INTERVAL_SEC", 15 * 60)
+        ),
     )
     parser.add_argument(
         "--max-iters-per-cell",
@@ -492,12 +586,12 @@ def parse_args(argv=None):
     parser.add_argument(
         "--max-refine-depth",
         type=int,
-        default=int(os.environ.get("MAX_REFINE_DEPTH", 40)),
+        default=int(os.environ.get("MAX_REFINE_DEPTH", 25)),
     )
     parser.add_argument(
         "--min-cell-size",
         type=float,
-        default=float(os.environ.get("MIN_CELL_SIZE", 1e-6)),
+        default=float(os.environ.get("MIN_CELL_SIZE", 1e-5)),
     )
     parser.add_argument(
         "--split-mode",
@@ -511,13 +605,8 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--gt-reach-regions",
-        "--gt-cache",
-        dest="gt_reach_regions",
         type=Path,
-        help=(
-            "synthetic-v3 reach-region pickle. --gt-cache is retained as "
-            "a compatibility alias."
-        ),
+        help="mountain-car-v3 reach-region pickle.",
     )
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--evaluate-only", action="store_true")
@@ -534,10 +623,22 @@ def parse_args(argv=None):
         parser.error("--max-total-states must be positive")
     if args.max_iters_per_cell <= 0:
         parser.error("--max-iters-per-cell must be positive")
+    if args.max_refine_depth <= 0:
+        parser.error("--max-refine-depth must be positive")
+    if args.min_cell_size <= 0:
+        parser.error("--min-cell-size must be positive")
     if args.evaluate_only and args.fresh:
         parser.error("--evaluate-only cannot be combined with --fresh")
     if args.evaluate_only and args.build_only:
         parser.error("--evaluate-only cannot be combined with --build-only")
+    if args.fresh and args.resume_existing:
+        parser.error("--fresh cannot be combined with --resume-existing")
+    if args.fresh and args.resume_from is not None:
+        parser.error("--fresh cannot be combined with --resume-from")
+    if args.resume_existing and args.resume_from is not None:
+        parser.error(
+            "--resume-existing cannot be combined with --resume-from"
+        )
     return args
 
 
@@ -554,15 +655,15 @@ def main(argv=None) -> int:
         if args.checkpoint is not None
         else default_checkpoint_path(grid_size)
     )
-    gt_reach_regions_path = (
-        args.gt_reach_regions.resolve()
-        if args.gt_reach_regions is not None
-        else default_gt_reach_regions_path()
-    )
     summary_path = (
         args.summary.resolve()
         if args.summary is not None
         else default_summary_path(checkpoint_path)
+    )
+    gt_reach_regions_path = (
+        args.gt_reach_regions.resolve()
+        if args.gt_reach_regions is not None
+        else MOUNTAIN_CAR_V3_GT
     )
 
     if args.evaluate_only:
@@ -573,12 +674,11 @@ def main(argv=None) -> int:
         )
         absys, _, metadata = load_model_checkpoint(source_path)
         ensure_current_transition_semantics(absys, metadata)
-        expected_shape = (grid_size, grid_size)
         actual_shape = abstraction_grid_shape(absys)
-        if actual_shape != expected_shape:
+        if actual_shape != (grid_size, grid_size):
             raise ValueError(
-                f"Checkpoint root grid is {actual_shape}, "
-                f"expected {expected_shape}."
+                f"Checkpoint root grid is {actual_shape}, expected "
+                f"{(grid_size, grid_size)}."
             )
         _, evaluation = evaluate(
             absys,
@@ -587,17 +687,17 @@ def main(argv=None) -> int:
         write_summary(
             summary_path,
             {
-                "stage": "evaluation_only",
+                **metadata,
                 "checkpoint": str(source_path),
                 "grid_shape": list(actual_shape),
-                "source_metadata": metadata,
                 "evaluation": evaluation,
                 "evaluated_at": time.time(),
+                "last_operation": "evaluation_only",
             },
         )
         print(
             f"[RESULT] final recall = "
-            f"{evaluation['recall_gt_safe_volume']:.6f}",
+            f"{evaluation['recall_gt_goal_volume']:.6f}",
             flush=True,
         )
         return 0
@@ -605,9 +705,14 @@ def main(argv=None) -> int:
     loaded_from: Optional[Path] = None
     prior_metadata: dict = {}
     build_elapsed = 0.0
-    if not args.fresh and checkpoint_path.exists():
+    transitions_rebuilt = False
+    if args.resume_existing:
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(
+                f"Cannot resume missing checkpoint: {checkpoint_path}"
+            )
         loaded_from = checkpoint_path
-    elif not args.fresh and args.resume_from is not None:
+    elif args.resume_from is not None:
         loaded_from = args.resume_from.resolve()
 
     if loaded_from is not None:
@@ -618,13 +723,13 @@ def main(argv=None) -> int:
         )
     else:
         print(
-            f"[BUILD] constructing {grid_size}x{grid_size} abstraction...",
+            f"[BUILD] constructing {grid_size}x{grid_size} Taylor "
+            "abstraction...",
             flush=True,
         )
         build_start = time.monotonic()
         absys, domain = build_abstraction(grid_size, grid_size)
         build_elapsed = time.monotonic() - build_start
-        transitions_rebuilt = False
         print(f"[BUILD] completed in {build_elapsed:.3f}s", flush=True)
 
     actual_shape = abstraction_grid_shape(absys)
@@ -649,14 +754,16 @@ def main(argv=None) -> int:
     )
     if loaded_from is not None and not resume_semantics_match:
         print(
-            "[RESUME] prior completed-candidate markers were cleared because "
-            "the transition/CEGAR semantics changed.",
+            "[RESUME] prior completed-candidate markers were cleared "
+            "because semantics changed.",
             flush=True,
         )
+
+    actor_hash = mc._checkpoint_sha256(mc.LOCAL_CHECKPOINT_PATH)
     base_metadata = {
         "grid_shape": list(actual_shape),
         "phi": FORMULA,
-        "loaded_from": str(loaded_from) if loaded_from is not None else None,
+        "loaded_from": str(loaded_from) if loaded_from else None,
         "previous_stage": prior_metadata.get("stage"),
         "build_elapsed_sec": build_elapsed,
         "time_limit_sec": args.time_limit_sec,
@@ -671,11 +778,49 @@ def main(argv=None) -> int:
         "cegar_semantics": CEGAR_SEMANTICS,
         "transitions_rebuilt_on_load": transitions_rebuilt,
         "gt_reach_regions": str(gt_reach_regions_path),
+        "controller_checkpoint": str(mc.LOCAL_CHECKPOINT_PATH),
+        "controller_checkpoint_sha256": actor_hash,
         "completed_candidate_uids": completed_candidate_uids,
         "resumed_completed_candidate_count": len(
             completed_candidate_uids
         ),
     }
+
+    if (
+        args.resume_existing
+        and len(absys.part.leaves) >= max_total_states
+        and resume_semantics_match
+    ):
+        print(
+            "[RESUME] checkpoint is already at the requested state limit; "
+            "no CEGAR iterations will run. Preserving its recorded runtime.",
+            flush=True,
+        )
+        verified, evaluation = evaluate(
+            absys,
+            gt_reach_regions_path=gt_reach_regions_path,
+        )
+        preserved_metadata = {
+            **prior_metadata,
+            "checkpoint": str(checkpoint_path),
+            "evaluation": evaluation,
+            "last_operation": "resume_noop_at_state_limit",
+            "resumed_at": time.time(),
+        }
+        save_model_checkpoint(
+            absys,
+            checkpoint_path,
+            domain=domain,
+            metadata=preserved_metadata,
+            verified=verified,
+        )
+        write_summary(summary_path, preserved_metadata)
+        print(
+            f"[RESULT] unchanged checkpoint at {len(absys.part.leaves)} "
+            f"states; recall={evaluation['recall_gt_goal_volume']:.6f}",
+            flush=True,
+        )
+        return 0
 
     if loaded_from != checkpoint_path or args.fresh:
         save_model_checkpoint(
@@ -703,6 +848,7 @@ def main(argv=None) -> int:
 
     verified_before = compute_verified_set_via_fixpoint(absys)
     unknown_before = set(absys.part.leaves) - verified_before
+    transition_counters_before = transition_work_counters(absys)
     print(
         f"[CLASSIFY] before refinement: verified={len(verified_before)} "
         f"unknown={len(unknown_before)}",
@@ -710,7 +856,8 @@ def main(argv=None) -> int:
     )
 
     refinement_budget = max(
-        0.0, args.time_limit_sec - args.safety_margin_sec
+        0.0,
+        args.time_limit_sec - args.safety_margin_sec,
     )
     refinement_start = time.monotonic()
     deadline = refinement_start + refinement_budget
@@ -732,19 +879,25 @@ def main(argv=None) -> int:
     def should_stop() -> bool:
         return current_stop_reason() is not None
 
-    def progress_callback(absys_cb: Abstraction, progress: dict) -> None:
+    def progress_callback(
+        absys_callback: Abstraction,
+        progress: dict,
+    ) -> None:
         last_progress[0] = dict(progress)
         now = time.monotonic()
         checkpoint_due = (
             args.checkpoint_interval_sec == 0
             or now - last_checkpoint[0] >= args.checkpoint_interval_sec
             or should_stop()
-            or progress.get("stop_reason") is not None
+            or progress.get("stop_reason") in {
+                "state_limit",
+                "external_stop",
+            }
         )
         if not checkpoint_due:
             return
         save_model_checkpoint(
-            absys_cb,
+            absys_callback,
             checkpoint_path,
             domain=domain,
             metadata={
@@ -798,6 +951,11 @@ def main(argv=None) -> int:
 
     refinement_finished_at = time.monotonic()
     refinement_elapsed = refinement_finished_at - refinement_start
+    transition_counters_after = transition_work_counters(absys)
+    transition_work = transition_counter_delta(
+        transition_counters_after,
+        transition_counters_before,
+    )
     stop_reason = (
         current_stop_reason()
         or refinement_summary.get("stop_reason")
@@ -820,6 +978,17 @@ def main(argv=None) -> int:
         ),
     }
     refinement_summary.update(cegar_timer)
+    refinement_summary.update(transition_work)
+    print(
+        "[TRANSITIONS] CEGAR performed "
+        f"{transition_work['cegar_incremental_transition_updates_total']} "
+        "split update(s), "
+        f"{transition_work['cegar_transition_source_recomputations_total']} "
+        "Taylor successor recomputation(s), and "
+        f"{transition_work['cegar_full_transition_rebuilds_total']} full "
+        "graph rebuild(s).",
+        flush=True,
+    )
     if state_limit_before_time_limit:
         print(
             "[TIMER] state limit reached before time limit; "
@@ -837,6 +1006,8 @@ def main(argv=None) -> int:
             "stage": "refinement_complete_pending_evaluation",
             "refinement_elapsed_sec": refinement_elapsed,
             **cegar_timer,
+            **transition_work,
+            **transition_counters_after,
             "refinement_summary": refinement_summary,
             "stop_reason": stop_reason,
         },
@@ -852,6 +1023,8 @@ def main(argv=None) -> int:
         "stage": "final",
         "refinement_elapsed_sec": refinement_elapsed,
         **cegar_timer,
+        **transition_work,
+        **transition_counters_after,
         "refinement_summary": refinement_summary,
         "stop_reason": stop_reason,
         "evaluation": evaluation,
@@ -884,8 +1057,8 @@ def main(argv=None) -> int:
             flush=True,
         )
     print(
-        f"  recall:     {evaluation['recall_gt_safe_volume']:.6f} "
-        f"({evaluation['recall_gt_safe_volume'] * 100:.2f}%)",
+        f"  recall:     {evaluation['recall_gt_goal_volume']:.6f} "
+        f"({evaluation['recall_gt_goal_volume'] * 100:.2f}%)",
         flush=True,
     )
     return 0

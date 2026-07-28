@@ -1,0 +1,28 @@
+{
+  "case_study": "synthetic",
+  "checkpoint": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\synthetic\\artifacts\\synthetic_cegar_90x90.pkl",
+  "ground_truth": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\synthetic-v3\\synthetic_reach_regions.pkl",
+  "initial_states": 10000,
+  "kripke_construction_time_sec": 0.13864490005653352,
+  "model_checking_time_sec": 0.04451499995775521,
+  "property": "A F goal",
+  "recall": 0.9394406931008176,
+  "recall_details": {
+    "ground_truth_safe_partition_cells": 6996,
+    "ground_truth_safe_volume": 260.93402777777777,
+    "gt_fixed_grid_label_counts": {
+      "fail": 3398,
+      "goal": 6602
+    },
+    "gt_nx": 100,
+    "gt_ny": 100,
+    "initial_partition_cells": 10000,
+    "recall": 0.9394406931008176,
+    "verified_ground_truth_safe_partition_cells": 5768,
+    "verified_ground_truth_safe_volume": 245.13204390914353
+  },
+  "reference": "synthetic-v3",
+  "satisfying_initial_states": 5804,
+  "states": 10001,
+  "transitions": 42498
+}

@@ -33,7 +33,7 @@ DOMAIN_LB = np.array([-10.0, -10.0])
 DOMAIN_UB = np.array([10.0, 10.0])
 
 INITIAL_DOMAIN_LB = np.array([-10.0, -10.0])
-INITIAL_DOMAIN_UB = np.array([-8.0, -8.0])
+INITIAL_DOMAIN_UB = np.array([10.0, 10.0])
 
 DOMAIN = Rect(
     DOMAIN_LB[0],
@@ -71,6 +71,7 @@ class SyntheticDynamics(AffineDynamics):
             A=ss.A_GLOBAL,
             xstar=GOAL_CENTER,
         )
+        self.goal_radius = GOAL_RADIUS
 
     def dynamics(self, x):
         return ss.dynamics(
@@ -441,6 +442,177 @@ def compute_recall(
     print(f"Recall = {recall:.4f}")
 
     return recall
+
+
+def _synthetic_v3_fixed_index_range(edges, lo, hi):
+    """Exact index convention used by synthetic-v3.check_ground_truth_fast."""
+    n = len(edges) - 1
+    if hi <= edges[0] or lo >= edges[-1]:
+        return None
+    i_lo = int(np.searchsorted(edges, lo, side="right") - 1)
+    i_hi = int(np.searchsorted(edges, hi, side="left") - 1)
+    i_lo = max(0, min(n - 1, i_lo))
+    i_hi = max(0, min(n - 1, i_hi))
+    if i_hi < i_lo:
+        return None
+    return i_lo, i_hi
+
+
+def classify_partition_with_synthetic_v3_ground_truth(
+    absys,
+    gt_reach_regions,
+    *,
+    domain=DOMAIN,
+):
+    """Label hierarchical leaves using synthetic-v3's fixed-grid rule.
+
+    A leaf is ``goal`` only when every fixed ground-truth cell with
+    positive-area overlap is labeled ``goal``.  This is the hierarchical
+    partition equivalent of synthetic-v3's ``check_ground_truth_fast``.
+    """
+    if not gt_reach_regions:
+        raise ValueError("gt_reach_regions is empty")
+    if not all(
+        isinstance(key, tuple) and len(key) == 2
+        for key in gt_reach_regions
+    ):
+        raise ValueError(
+            "Expected gt_reach_regions keys of the form (i, j)."
+        )
+
+    nx_gt = max(int(key[0]) for key in gt_reach_regions) + 1
+    ny_gt = max(int(key[1]) for key in gt_reach_regions) + 1
+    expected_keys = nx_gt * ny_gt
+    if len(gt_reach_regions) != expected_keys:
+        raise ValueError(
+            "Ground-truth grid is incomplete: "
+            f"found {len(gt_reach_regions)} cells, expected {expected_keys}."
+        )
+
+    x_edges = np.linspace(domain.xmin, domain.xmax, nx_gt + 1)
+    y_edges = np.linspace(domain.ymin, domain.ymax, ny_gt + 1)
+    goal_cells = {
+        (int(key[0]), int(key[1]))
+        for key, label in gt_reach_regions.items()
+        if label == "goal"
+    }
+
+    classification = {}
+    for uid, node in absys.part.leaves.items():
+        rect = node.rect
+        area = rect_volume(rect)
+        if (
+            rect.xmin < domain.xmin
+            or rect.xmax > domain.xmax
+            or rect.ymin < domain.ymin
+            or rect.ymax > domain.ymax
+        ):
+            classification[uid] = ("fail", area)
+            continue
+
+        x_range = _synthetic_v3_fixed_index_range(
+            x_edges,
+            rect.xmin,
+            rect.xmax,
+        )
+        y_range = _synthetic_v3_fixed_index_range(
+            y_edges,
+            rect.ymin,
+            rect.ymax,
+        )
+        if x_range is None or y_range is None:
+            classification[uid] = ("fail", area)
+            continue
+
+        all_goal = all(
+            (i, j) in goal_cells
+            for i in range(x_range[0], x_range[1] + 1)
+            for j in range(y_range[0], y_range[1] + 1)
+        )
+        classification[uid] = (
+            ("goal", area) if all_goal else ("fail", area)
+        )
+
+    return classification
+
+
+def compute_synthetic_v3_recall(
+    absys,
+    verified,
+    gt_reach_regions,
+    *,
+    initial_domain=DOMAIN,
+    domain=DOMAIN,
+):
+    """Compute the same volume recall reported by synthetic-v3.
+
+    The denominator is the volume of initial abstraction leaves classified
+    ``goal`` by the fixed ground truth.  The numerator is the portion of that
+    same volume contained in model-checked/verified initial leaves.
+    """
+    classification = classify_partition_with_synthetic_v3_ground_truth(
+        absys,
+        gt_reach_regions,
+        domain=domain,
+    )
+
+    def is_initial(rect):
+        # Match synthetic-v3's side="right" overlap convention.
+        return (
+            rect.xmax > initial_domain.xmin
+            and rect.xmin <= initial_domain.xmax
+            and rect.ymax > initial_domain.ymin
+            and rect.ymin <= initial_domain.ymax
+        )
+
+    initial_uids = {
+        uid
+        for uid, node in absys.part.leaves.items()
+        if is_initial(node.rect)
+    }
+    gt_safe_uids = {
+        uid
+        for uid, (label, _) in classification.items()
+        if label == "goal" and uid in initial_uids
+    }
+    verified_gt_safe_uids = gt_safe_uids & set(verified)
+
+    gt_safe_volume = sum(
+        classification[uid][1]
+        for uid in gt_safe_uids
+    )
+    verified_gt_safe_volume = sum(
+        classification[uid][1]
+        for uid in verified_gt_safe_uids
+    )
+    recall = (
+        verified_gt_safe_volume / gt_safe_volume
+        if gt_safe_volume
+        else float("nan")
+    )
+
+    labels = {}
+    for label in gt_reach_regions.values():
+        labels[label] = labels.get(label, 0) + 1
+
+    print(
+        "Recall "
+        f"(synthetic-v3) = {recall:.4f} "
+        f"[{verified_gt_safe_volume:.12g}/{gt_safe_volume:.12g}]"
+    )
+    return {
+        "recall": recall,
+        "ground_truth_safe_volume": gt_safe_volume,
+        "verified_ground_truth_safe_volume": verified_gt_safe_volume,
+        "ground_truth_safe_partition_cells": len(gt_safe_uids),
+        "verified_ground_truth_safe_partition_cells": len(
+            verified_gt_safe_uids
+        ),
+        "initial_partition_cells": len(initial_uids),
+        "gt_nx": max(int(key[0]) for key in gt_reach_regions) + 1,
+        "gt_ny": max(int(key[1]) for key in gt_reach_regions) + 1,
+        "gt_fixed_grid_label_counts": labels,
+    }
 ###############################################################################
 # Visualization
 ###############################################################################
