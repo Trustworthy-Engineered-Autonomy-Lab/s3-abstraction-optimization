@@ -35,7 +35,8 @@ for the reverse-simulation metric. A rectilinear grid is parameterized by
 unconstrained gap weights $\omega_{i,j}$, which are converted into positive,
 normalized cell widths:
 
-$$\eta_{i,j}=(\overline{x}_i-\underline{x}_i)\frac{\operatorname{Softplus}(\omega_{i,j})}{\sum_{\ell}\operatorname{Softplus}(\omega_{i,\ell})}.$$
+$$\eta_{i,j}=(\overline{x}_i-\underline{x}_i)\frac{\mathrm{Softplus}(\omega_{i,j})}{\sum_{\ell}\mathrm{Softplus}(\omega_{i,\ell})}.
+$$
 
 Taylor-model interval reachability is used to overapproximate each cell's
 one-step image. Abstract successors are the cells intersecting that reachable
