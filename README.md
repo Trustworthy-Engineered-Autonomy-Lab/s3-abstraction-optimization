@@ -13,7 +13,7 @@ abstractions are constructed to overapproximate the concrete dynamics; the
 optimization and refinement procedures then seek less conservative models with
 fewer spurious behaviors and less nondeterminism.
 
-## Paper context
+## Context
 
 Let $s = (X, X_0, f)$ be a concrete transition system and let
 $\hat{s}_\theta (\hat{X}, \hat{X}_0, \hat{f})$ be the finite abstraction induced by a quantizer $\psi$ with
@@ -45,7 +45,7 @@ smooths the finite-horizon max operations with temperature-scaled
 log-sum-exp terms, making the grid parameters amenable to gradient-based
 optimization.
 
-The three case studies studies in the paper are:
+The three case studies in the paper are:
 
 - **Spiral:** a stable two-dimensional linear system. The property asks that
   trajectories remain in the modeled domain and eventually reach the goal
@@ -96,7 +96,7 @@ See the paper and supporting materials for further details.
 The case-study source files remain beside their entry points because some saved
 Python artifacts refer to those module names when they are unpickled.
 
-## Requirements and installation
+## Requirements and Installation
 
 Python 3.11 is recommended and is the version used by the Docker image.
 Dependencies are listed in `requirements.txt`; the main packages include
@@ -190,7 +190,7 @@ If a minimal base image does not provide Bash, substitute `/bin/sh`. When a
 host directory is mounted at `/app`, it intentionally replaces the copy of the
 repository baked into the image for that container.
 
-## Running the optimization experiments
+## Running the Rxperiments
 
 Choose one of the three case-study directories:
 
