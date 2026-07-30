@@ -356,13 +356,6 @@ class Abstraction:
     def _compute_succs(self, u: int, a: str) -> Set[int]:
         """
         Compute successor set for cell u under action a.
-
-        Match synthetic-v3's AABB convention:
-
-        * a cell interval intersects [lo, hi] when cell_hi > lo and
-          cell_lo <= hi (``searchsorted(..., side="right")`` at both ends);
-        * OUT is also a successor whenever any part of an image box leaves
-          the partition domain, even if the box has in-domain successors.
         """
         node = self.part.leaves[u]
         dyn  = self.dyn_by_action[a]

@@ -80,15 +80,6 @@ def corners_are_safe(x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, domain, max_steps=300):
     theta=0 was checked -- this both replaces the center-point check with
     genuine corner propagation, AND replaces the fixed theta=0 slice with
     the box's actual theta range):
-
-      - If ANY corner's trajectory ever enters the obstacle region, the
-        box is NOT safe (this is an immediate veto, independent of what
-        happens to any other corner).
-      - If ALL 8 corners reach the goal within max_steps (without hitting
-        the obstacle or leaving the domain first), the box IS safe.
-      - Otherwise -- e.g. only some corners reach the goal in time, or a
-        corner leaves the domain before reaching the goal -- the box is
-        NOT safe.
     """
     from main import unicycle_dynamics, Y_GOAL, Y_OBS, R_GOAL, R_OBS
 
@@ -123,23 +114,7 @@ def corners_are_safe(x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, domain, max_steps=300):
 
 
 def build_gt_safe_set(domain, nx_gt=60, ny_gt=60, nz_gt=20, max_steps=300):
-    """
-    Build the ground-truth safe set on a nx_gt x ny_gt x nz_gt (theta) grid.
 
-    NOTE: this now spans theta as a real third grid dimension, and safety
-    of each GT cell is decided by corners_are_safe's 8-corner propagation
-    (see above) rather than a single center point evaluated only at
-    theta=0. The returned set contains (i, j, k) index tuples rather than
-    (i, j) pairs -- callers (compute_tpr / compute_recall) must index into
-    it with the cell's theta range as well, not just its xy footprint.
-
-    COST WARNING: this is nx_gt*ny_gt*nz_gt cells, each requiring 8
-    corner simulations of up to max_steps steps -- i.e.
-    nx_gt*ny_gt*nz_gt*8*max_steps calls to unicycle_dynamics in the worst
-    case. The default nz_gt=20 is a starting point, not a validated
-    choice -- tune it down (or reduce max_steps) if this becomes a
-    bottleneck relative to your CEGAR refinement runtime.
-    """
     print(f"\n[GT] Building ground truth safe set ({nx_gt}x{ny_gt}x{nz_gt}, "
           f"8-corner check)...", flush=True)
     dx_gt = (domain.xmax - domain.xmin) / nx_gt
@@ -179,25 +154,6 @@ def compute_tpr(
     nz_gt=20,
     initial_domain=None,
 ):
-    """
-    True positive rate = verified cells that are truly safe / all truly safe
-
-    NOTE: gt_safe now contains (i, j, k) tuples (k = theta index), since
-    build_gt_safe_set / corners_are_safe evaluate safety over each GT
-    cell's actual theta range rather than a fixed theta=0 slice.
-    cell_is_truly_safe below now requires ALL overlapping (i,j,k) GT cells
-    -- across the abstract cell's full theta extent, not just its xy
-    footprint -- to be in gt_safe.
-
-    initial_domain: same restriction as compute_recall's argument of the
-    same name -- cells falling outside this region are skipped before any
-    satisfaction check. Defaults to `domain` (no restriction beyond the
-    full domain) if not given, for backward compatibility. Added here (in
-    addition to compute_recall, which was explicitly requested) so TPR and
-    Recall are computed over the SAME population of cells -- otherwise the
-    two would silently diverge in a confusing way if only one of them were
-    restricted to the initial domain.
-    """
     if initial_domain is None:
         initial_domain = domain
 
@@ -206,19 +162,6 @@ def compute_tpr(
     dz_gt = (domain.zmax - domain.zmin) / nz_gt
 
     def cell_is_truly_safe(r) -> bool:
-        """
-        An abstract cell is truly safe iff ALL GT grid cells that overlap
-        its full x/y/theta box are in the GT-safe set.
-
-        FIX: the upper-bound index subtracts a tiny epsilon before
-        truncating. Without this, whenever an abstract cell's boundary
-        lands EXACTLY on a GT grid line (which happens for every cell
-        here, since nx_gt/ny_gt are exact integer multiples of the
-        abstract NX/NY), int() truncation spuriously included one extra
-        GT column/row that the cell only touches at a single zero-measure
-        point, not a real overlap -- making the safety check unnecessarily
-        stricter than intended.
-        """
         eps = 1e-9
         i_lo = max(0, int((r.xmin - domain.xmin) / dx_gt))
         i_hi = min(nx_gt - 1, int((r.xmax - domain.xmin) / dx_gt - eps))
@@ -268,30 +211,7 @@ def compute_tpr(
 
 def compute_recall(absys, verified_now, domain, gt_safe, nx_gt=60, ny_gt=60,
                     nz_gt=20, initial_domain=None):
-    """
-    Recall = verified volume / GT-safe volume.
 
-    Both numerator and denominator are computed via rect_volume so the
-    theta extent is correctly included on both sides.
-
-    The GT-safe volume is the sum of rect_volumes of all current abstract
-    cells that are entirely within the GT-safe set (same cell_is_truly_safe
-    check as compute_tpr). This is the right denominator because recall asks:
-    of the states that are truly safe, what fraction did we verify?
-
-    NOTE: gt_safe now contains (i, j, k) tuples (k = theta index) -- see
-    compute_tpr's docstring for why.
-
-    initial_domain: the domain a cell must fall fully inside of to be
-    considered at all. Before doing any satisfaction check or volume
-    accumulation for a leaf, we check whether it lies within
-    initial_domain and skip it (continue to the next leaf) if not, rather
-    than silently treating an out-of-domain cell as if it were a normal
-    interior cell. Defaults to `domain` (the same domain used for GT
-    indexing) if not given, since in this codebase there's normally only
-    one meaningful domain object -- pass a different one explicitly if you
-    want recall restricted to some other region.
-    """
     if initial_domain is None:
         initial_domain = domain
 
@@ -705,134 +625,3 @@ def visualize_classification(
 
     plt.show()
 
-
-if __name__ == "__main__":
-    import os
-    from main import build_abstraction, INIT_DOMAIN_LB, INIT_DOMAIN_UB
-
-    os.makedirs("visualization", exist_ok=True)
-
-    absys, domain = build_abstraction()
-
-    # --- FIX: actually construct and use the restricted initial domain
-    # (per Ethan) -- previously initial_domain was added as a parameter to
-    # compute_tpr/compute_recall but never passed at these call sites, so
-    # it silently defaulted to None -> fell back to the full domain,
-    # meaning NO restriction was actually applied in previous runs. ---
-    initial_domain = Rect(
-        float(INIT_DOMAIN_LB[0]), float(INIT_DOMAIN_UB[0]),
-        float(INIT_DOMAIN_LB[1]), float(INIT_DOMAIN_UB[1]),
-        float(INIT_DOMAIN_LB[2]), float(INIT_DOMAIN_UB[2]),
-    )
-    print(f"[WRAPPER] initial_domain: x=[{initial_domain.xmin},{initial_domain.xmax}] "
-          f"y=[{initial_domain.ymin},{initial_domain.ymax}] "
-          f"theta=[{initial_domain.zmin:.4f},{initial_domain.zmax:.4f}]")
-
-    phi = "(!unsafe) U goal"
-    print("[WRAPPER] leaves:", len(absys.part.leaves))
-    print("[WRAPPER] phi:", phi)
-
-    NZ_GT = 20  # <-- theta resolution for the ground-truth grid; tune for cost vs. accuracy
-    gt_safe = build_gt_safe_set(domain, nx_gt=60, ny_gt=60, nz_gt=NZ_GT, max_steps=300)
-
-    print("\n── Abstraction Metrics (Before CEGAR) ───────────────────────────")
-    slp_before = compute_slp(absys)
-    msu_before = compute_msu(absys)
-
-    cls_before = classify_all_leaves_once(absys, phi, action="step")
-    verified_before = set(cls_before.verified)
-    refuted_before  = set(cls_before.refuted)
-    unknown_before  = set(cls_before.unknown)
-
-    print("\n[CLASSIFICATION Before CEGAR]")
-    print("verified:", len(verified_before))
-    print("refuted :", len(refuted_before))
-    print("unknown :", len(unknown_before))
-
-    compute_metrics(absys, verified_before, refuted_before, unknown_before)
-
-    tpr_before    = compute_tpr(absys, verified_before, domain,
-                                gt_safe=gt_safe, nx_gt=60, ny_gt=60, nz_gt=NZ_GT,
-                                initial_domain=initial_domain)
-    recall_before = compute_recall(absys, verified_before, domain,
-                                   gt_safe=gt_safe, nx_gt=60, ny_gt=60, nz_gt=NZ_GT,
-                                   initial_domain=initial_domain)
-    # ORDERING:  "largest"  — largest cells first (default)
-    #            "smallest" — smallest cells first (inverted)
-
-    ORDERING = "largest"   # <-- change per run
-    RAND_SEED = 0           # <-- change for random runs (0..4)
-    SPLIT_MODE = "auto"     
-    MAX_ITERS_PER_CELL = 150
-    MAX_REFINE_DEPTH = 40
-    MIN_CELL_SIZE = 0.001
-    MIN_CELL_THETA = 0.001   # <-- set to None to leave theta refinement unbounded
-    # ─────────────────────────────────────────────────────────────────────────
-
-    cls_after = refine_one_round(
-        absys=absys,
-        phi=phi,
-        initial_unknown=unknown_before,
-        max_iters_per_cell=MAX_ITERS_PER_CELL,
-        min_cell_width=MIN_CELL_SIZE,
-        min_cell_height=MIN_CELL_SIZE,
-        max_refine_depth=MAX_REFINE_DEPTH,
-        min_cell_theta=MIN_CELL_THETA,
-        split_mode=SPLIT_MODE,
-        gc_every=100,
-        ordering=ORDERING,
-        rand_seed=RAND_SEED,
-    )
-
-    verified_after = set(cls_after.verified)
-    refuted_after  = set(cls_after.refuted)
-    unknown_after  = set(cls_after.unknown)
-
-    print("\n── Abstraction Metrics (After CEGAR) ────────────────────────────")
-    slp_after = compute_slp(absys)
-    msu_after = compute_msu(absys)
-
-    all_leaf_uids = set(u for u in absys.part.leaves.keys()
-                        if u != absys.OUT_UID)
-    refuted_final = all_leaf_uids - verified_after
-    unknown_final = set()
-
-    print("\n[CLASSIFICATION After CEGAR (unknowns → refuted conservatively)]")
-    print("verified:", len(verified_after))
-    print("refuted :", len(refuted_final))
-    print("unknown :", len(unknown_final))
-    print("Total leaves:", len(absys.part.leaves))
-
-    compute_metrics(absys, verified_after, refuted_final, unknown_final)
-
-    tpr_after    = compute_tpr(absys, verified_after, domain,
-                               gt_safe=gt_safe, nx_gt=60, ny_gt=60, nz_gt=NZ_GT,
-                               initial_domain=initial_domain)
-    recall_after = compute_recall(absys, verified_after, domain,
-                                  gt_safe=gt_safe, nx_gt=60, ny_gt=60, nz_gt=NZ_GT,
-                                  initial_domain=initial_domain)
-
-    print("\n── Summary (Table 4 format) ──────────────────────────────────────")
-    print(f"  Ordering:  {ORDERING!r}" + (f"  seed={RAND_SEED}" if ORDERING == "random" else ""))
-    print(f"  Split mode: {SPLIT_MODE!r}   Min cell theta: {MIN_CELL_THETA}")
-    print(f"  {'Metric':<28} {'Before':>10} {'After':>10}")
-    print(f"  {'-'*50}")
-    print(f"  {'SLP':<28} {slp_before:>10.3f} {slp_after:>10.3f}")
-    print(f"  {'mSu':<28} {msu_before:>10.2f} {msu_after:>10.2f}")
-    print(f"  {'TPR (Eq.29, paper Table 4)':<28} {tpr_before:>10.3f} {tpr_after:>10.3f}")
-    print(f"  {'Recall (verified/GT-safe vol)':<28} {recall_before:>10.3f} {recall_after:>10.3f}")
-    print(f"  {'Leaves before CEGAR':<28} {len(unknown_before) + len(verified_before) + len(refuted_before):>10}")
-    print(f"  {'Leaves after CEGAR':<28} {len(absys.part.leaves):>10}")
-    print(f"  {'Total refinements':<28} {len(absys.part.leaves) - (len(unknown_before) + len(verified_before) + len(refuted_before)):>10}")
-    print(f"──────────────────────────────────────────────────────────────────")
-
-    visualize_classification(
-        absys,
-        verified=verified_after,
-        refuted=refuted_final,
-        title="Unicycle - After CEGAR",
-        save_path="visualization/global_classification.png",
-        show_grid=True,
-        grid_linewidth=0.5,
-        show_goal_border=True,
-    )

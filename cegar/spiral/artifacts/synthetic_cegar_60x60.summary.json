@@ -381,7 +381,7 @@
     },
     "gt_nx": 100,
     "gt_ny": 100,
-    "gt_reach_regions": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\synthetic-v3\\synthetic_reach_regions.pkl",
+    "gt_reach_regions": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\spiral\\artifacts\\cache\\reach.pkl",
     "initial_partition_cells": 4900,
     "leaf_count": 4900,
     "missing_transition_sources": 0,
@@ -399,7 +399,7 @@
     60,
     60
   ],
-  "gt_reach_regions": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\synthetic-v3\\synthetic_reach_regions.pkl",
+  "gt_reach_regions": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\spiral\\artifacts\\cache\\reach.pkl",
   "ignored_counterexamples": 0,
   "iterations": 1421,
   "loaded_from": null,

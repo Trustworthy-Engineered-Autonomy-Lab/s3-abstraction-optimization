@@ -43,7 +43,7 @@ if ($Fresh) {
 elseif ($ResumeLegacy60) {
     $args60 += @(
         "--resume-from",
-        (Join-Path $syntheticDir "synthetic_60x60.pkl")
+        (Join-Path $artifactDir "legacy\synthetic_60x60.pkl")
     )
 }
 

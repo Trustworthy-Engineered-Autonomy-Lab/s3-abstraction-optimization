@@ -33,11 +33,7 @@ from mountain_car_benchmark import (
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ARTIFACT_DIR = SCRIPT_DIR / "artifacts"
-MOUNTAIN_CAR_V3_GT = (
-    SCRIPT_DIR.parents[1]
-    / "mountain-car-v3"
-    / "mc_reach_regions.pkl"
-)
+MOUNTAIN_CAR_V3_GT = ARTIFACT_DIR / "cache" / "reach.pkl"
 CHECKPOINT_VERSION = 1
 CEGAR_SEMANTICS = "mountain-car-v3-corners-cycle-v1"
 STOP_REQUESTED = False
@@ -529,8 +525,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--grid-size",
         type=int,
-        choices=(60, 90),
         required=True,
+        help="Positive uniform root-grid size N for an N x N model.",
     )
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument(
@@ -613,6 +609,8 @@ def parse_args(argv=None):
     parser.add_argument("--build-only", action="store_true")
     args = parser.parse_args(argv)
 
+    if args.grid_size <= 0:
+        parser.error("--grid-size must be positive")
     if args.time_limit_sec < 0:
         parser.error("--time-limit-sec must be nonnegative")
     if args.safety_margin_sec < 0:

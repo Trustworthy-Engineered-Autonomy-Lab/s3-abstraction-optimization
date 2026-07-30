@@ -43,7 +43,7 @@ if ($Fresh) {
 elseif ($ResumeLegacy40) {
     $args40 += @(
         "--resume-from",
-        (Join-Path $unicycleDir "unicycle_refinement_model.pkl")
+        (Join-Path $artifactDir "legacy\unicycle_refinement_model.pkl")
     )
 }
 

@@ -25,8 +25,10 @@ from cegar_loop_mc import run_cegar
 # =====================================================================
 CHECKPOINT_FILENAME = "ddpg-MountainCarContinuous-v0-gymnasium.zip"
 ACTOR_CACHE_FILENAME = "mountain_car_actor_derivatives.npz"
-LOCAL_CHECKPOINT_PATH = Path(__file__).with_name(CHECKPOINT_FILENAME)
-ACTOR_CACHE_PATH = Path(__file__).with_name(ACTOR_CACHE_FILENAME)
+ARTIFACT_DIR = Path(__file__).resolve().parent / "artifacts"
+CACHE_DIR = ARTIFACT_DIR / "cache"
+LOCAL_CHECKPOINT_PATH = CACHE_DIR / CHECKPOINT_FILENAME
+ACTOR_CACHE_PATH = CACHE_DIR / ACTOR_CACHE_FILENAME
 POWER = 0.0015
 GRAVITY = 0.0025
 MIN_POSITION = -1.2
@@ -70,6 +72,7 @@ class NonDifferentiableStateError(DerivativeDomainError):
 def load_controller() -> DDPG:
     """Load the pretrained controller, downloading it only when necessary."""
     print("Importing pretrained DDPG...")
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
     if LOCAL_CHECKPOINT_PATH.exists():
         return DDPG.load(LOCAL_CHECKPOINT_PATH, device="cpu")
     checkpoint_path = hf_hub_download(
@@ -148,6 +151,7 @@ def _actor_shapes_are_valid(arrays: dict[str, np.ndarray]) -> bool:
 
 def _load_or_cache_actor_arrays(controller: DDPG) -> dict[str, np.ndarray]:
     """Load actor tensors from a checkpoint-keyed NumPy cache when possible."""
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
     checkpoint_hash = _checkpoint_sha256(LOCAL_CHECKPOINT_PATH)
     required_keys = {
         "W1", "b1", "W2", "b2", "W3", "b3",
@@ -1390,30 +1394,3 @@ def run_model_checking(
         },
     )
     return res
-
-
-# =====================================================================
-# Entry point (single-cell CEGAR test, mirrors unicycle's main.py)
-# =====================================================================
-
-if __name__ == "__main__":
-    # res = run_model_checking(
-    #     nx=60,
-    #     ny=60,
-    #     phi="F goal",
-    #     max_iters=300,
-    #     min_cell_width=0.0001,
-    #     min_cell_height=0.0001,
-    #     max_refine_depth=25,
-    #     split_mode="auto",
-    #     checkpoint_every=1,
-    #     time_limit_sec=None,  # set to 3 * 60 * 60 for timed runs
-    # )
-
-    # print("\nFINAL:", "VERIFIED" if res.verified else "NOT VERIFIED")
-    # print("iters:", res.iterations, "refinements:", res.refinements)\
-
-    with open("cegar/mountain-car/mountain_90x90.pkl", "rb") as f:
-            data = pickle.load(f)
-    
-    print(type(data))

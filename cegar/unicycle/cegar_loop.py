@@ -31,10 +31,7 @@ def rect_depth(r: Rect) -> float:
 
 def _compute_reachable_from(absys: Abstraction, init_uids: Set[int]) -> Set[int]:
     """
-    Forward BFS over absys.tr.succ starting from init_uids (merging across
-    all actions, matching how edges are actually added to the Kripke
-    structure below). Returns every uid reachable from init_uids, including
-    init_uids themselves and OUT_UID.
+    Forward BFS
     """
     reachable: Set[int] = set()
     seed = [u for u in init_uids if u == absys.OUT_UID or u in absys.part.leaves]
@@ -64,8 +61,7 @@ def build_spot_kripke(
     merge_actions: bool = True,
 ):
     """
-    Build a Spot Kripke structure from `absys` using a single shared BDD dict,
-    so that we can also translate formulas with that same dict.
+    Build a Spot Kripke structure from absys
     """
     import spot  # type: ignore
     from buddy import bdd_ithvar, bddtrue  # type: ignore
@@ -125,9 +121,6 @@ def build_spot_kripke(
             if u in uid_to_sid:
                 k.new_edge(init_sid, uid_to_sid[u])
 
-    # Edges -- only iterate over uids in the reachable set; their successors
-    # are guaranteed to already be in uid_to_sid since reachable_uids is
-    # closed under the successor relation by construction.
     for u in uids:
         if u == absys.OUT_UID:
             continue
@@ -150,10 +143,7 @@ def build_spot_kripke(
 
 def _parse_spot_run_to_lasso(run_str: str) -> Tuple[List[int], List[int]]:
     """
-    Parse Spot's textual run format into (prefix_uids, cycle_uids).
-
-    We extract the integer state-names (uids) from the lines in Prefix/Cycle sections.
-    Any non-integer state names (e.g., init hub) are ignored.
+    Parse Spot's textual run format into (prefix_uids, cycle_uids)
     """
     prefix: List[int] = []
     cycle: List[int] = []
@@ -206,8 +196,6 @@ def spot_get_counterexample_lasso(
 
 
     # Translate the negation of the formula using the same dict
-    # (this is required so APs match the Kripke's BDD vars)
-    # not_phi = spot.formula.Not(phi)
     f = spot.formula(phi)
     not_phi = spot.formula.Not(f)
 
@@ -227,12 +215,7 @@ def reach_avoid_get_counterexample_lasso(
     merge_actions: bool = True,
 ) -> Optional[Tuple[List[int], List[int]]]:
     """
-    Find a counterexample to ``(!unsafe) U goal`` directly in the graph.
-
-    A violating run either reaches unsafe/OUT before goal, or has an
-    infinite cycle that avoids goal.  This formula-specific DFS produces
-    the same prefix/cycle shape expected by the validator and avoids a hard
-    runtime dependency on Spot for the unicycle reach-avoid experiment.
+    Find a counterexample directly in the graph.
     """
     label_cache: Dict[int, Set[str]] = {
         absys.OUT_UID: set(absys.ap_labeler(None))
@@ -489,14 +472,8 @@ def _taylor_error_terms_per_dim(absys: Abstraction, r: Rect, action: str = "step
         lower = np.array([r.xmin, r.ymin, r.zmin], dtype=float)
         upper = np.array([r.xmax, r.ymax, r.zmax], dtype=float)
         R_lo, R_hi = _main.taylor_remainder(lower, upper)
-        # magnitude of remainder contributed "at" each output dim; use as a
-        # proxy for which input half-width is driving imprecision the most.
-        # Combine with each dim's own half-width so we don't keep splitting
-        # an axis that's already essentially degenerate.
         h = 0.5 * (upper - lower)
         mag = np.abs(R_hi) + np.abs(R_lo)
-        # Weight by remaining half-width so a dimension that's already tiny
-        # isn't picked just because its remainder term happens to be large.
         weighted = mag * (h > 1e-9)
         return weighted
     except Exception:
@@ -512,20 +489,6 @@ def choose_split_dims(
 ) -> Tuple[bool, bool, bool]:
     """
     Decide which of (x, y, theta) to split for this cell.
-
-    mode:
-      "xy"        -- legacy behavior, always split x and y only.
-      "xyz"       -- always split all three dims (8-way split).
-      "auto"      -- (default) split the single dimension responsible for
-                     the most imprecision, falling back to "largest extent"
-                     when a Taylor-remainder-based signal isn't available.
-                     This keeps state-count growth closer to CEGAR's normal
-                     per-iteration cost (one bisection, 2 children) while
-                     still allowing theta to shrink when it's the bottleneck.
-
-    Returns a 3-tuple of booleans (split_x, split_y, split_z) indicating
-    which dimensions to cut at their midpoint. Dimensions whose extent is
-    already <= min_extent are never selected, to avoid degenerate splits.
     """
     node = absys.part.leaves[leaf_uid]
     r = node.rect
@@ -543,8 +506,6 @@ def choose_split_dims(
         weighted = np.where(splittable, weighted, -np.inf)
         best = int(np.argmax(weighted))
     else:
-        # Fallback: split whichever splittable dimension is geometrically
-        # largest (matches the intuition of "cut the biggest side").
         sizes = np.where(splittable, extents, -np.inf)
         best = int(np.argmax(sizes))
 
@@ -552,9 +513,6 @@ def choose_split_dims(
     if splittable[best]:
         choice[best] = True
     else:
-        # Nothing splittable at all (shouldn't normally happen since
-        # can_refine already checked width/height before calling us) --
-        # fall back to x then y then z, whichever is available.
         for i in range(3):
             if splittable[i]:
                 choice[i] = True
@@ -584,8 +542,6 @@ def split_cell(
     zm = 0.5 * (r.zmin + r.zmax) if split_z else None
 
     if xm is None and ym is None and zm is None:
-        # Degenerate: nothing to split on. Caller's can_refine should have
-        # already prevented this; fall back to legacy xy split as a safety net.
         return absys.split_and_update(0.5 * (r.xmin + r.xmax), 0.5 * (r.ymin + r.ymax), leaf_uid)
 
     return absys.split_and_update_general(leaf_uid, xm=xm, ym=ym, zm=zm)
@@ -599,10 +555,6 @@ def can_refine(
     max_depth: Optional[int],
     min_depth_theta: Optional[float] = None,
 ) -> bool:
-    """
-    min_depth_theta: minimum theta extent allowed (analogous to min_width /
-    min_height but for the z/theta axis)
-    """
     if uid == absys.OUT_UID:
         return False
     node = absys.part.leaves.get(uid)
@@ -648,25 +600,7 @@ def run_cegar(
     max_total_states: Optional[int] = None,
 ) -> CEGARResult:
     """
-    Full CEGAR loop:
-
-      repeat:
-        - Spot finds abstract counterexample lasso for phi
-        - validate lasso via set-propagation (path-consistency)
-        - if spurious: split selected cell and continue
-        - if feasible: return NOT VERIFIED (real counterexample witness at this precision)
-      until max_iters
-
-    split_mode: passed straight through to split_cell / choose_split_dims.
-      "xy" reproduces the old x/y-only bisection; "xyz" always splits all
-      three axes; "auto" (default) picks the single most-useful axis per
-      split (falls back to "largest extent" if no Taylor-remainder signal
-      is available for the current dynamics object).
-
-    min_cell_theta: analogous to min_cell_width/min_cell_height but for the
-      theta axis. Pass this if you want refinement to also stop once theta
-      extent gets small enough -- otherwise theta can in principle keep
-      splitting down toward min_extent inside choose_split_dims.
+    Full CEGAR loop
     """
     if phi is None:
         # original phi value

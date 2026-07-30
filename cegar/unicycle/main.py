@@ -23,11 +23,7 @@ X_MIN, X_MAX = 0.0, 50.0
 Y_MIN, Y_MAX = 0.0, 50.0
 Z_MIN, Z_MAX = -np.pi, np.pi
 
-# Initial domain: the region where the system is actually initialized in
-# practice (per Ethan), smaller than the full state-space domain above.
-# For the unicycle, this is the full x/y extent but only a narrow slice of
-# theta around 0. Recall should only be evaluated over cells that fall
-# within this region -- see compute_recall's `initial_domain` argument.
+# Initial domain
 INIT_DOMAIN_LB = np.array([X_MIN, Y_MIN, -np.pi / 4])
 INIT_DOMAIN_UB = np.array([X_MAX, Y_MAX,  np.pi / 4])
 
@@ -94,15 +90,10 @@ def _interval_mul(a_lo, a_hi, b_lo, b_hi):
 # =====================================================================
 
 def _wrap_to_pi_sym(angle):
-    """Smooth wrap to [-pi, pi] via arctan(tan()) — differentiable."""
     return 2 * sp.atan(sp.tan(angle / 2))
 
 
 def _cl_system_sym(state):
-    """
-    Symbolic closed-loop unicycle dynamics matching unicycle_system_sympy.py.
-    Controller parameters must match those used in the paper baseline.
-    """
     px, py, theta = state
 
     # Controller parameters (must match unicycle_system_sympy.py exactly)
@@ -147,7 +138,10 @@ def _cl_system_sym(state):
 # Derive / cache symbolic Jacobian and Hessian
 # =====================================================================
 
-_CACHE_PATH = Path(__file__).with_name('unicycle_derivatives.pkl')
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_CACHE_PATH = (
+    _SCRIPT_DIR / "artifacts" / "cache" / "unicycle_derivatives.pkl"
+)
 
 
 def _derive_and_cache():
@@ -175,6 +169,7 @@ def _derive_and_cache():
 
     print(f"[SYMPY] Done ({time.perf_counter() - t0:.1f}s).", flush=True)
 
+    _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(_CACHE_PATH, 'wb') as f:
         pickle.dump((F, state_vars, J_cse, H_cse), f)
 
@@ -222,7 +217,6 @@ def _load_or_derive():
 
 
 def _build_fast_eval(state_vars, cse_data, output_shape=None):
-    """Build a fast numerical function from SymPy CSE data."""
     substitutions, reduced_exprs = cse_data
     cse_vars  = [s for s, _ in substitutions]
     cse_exprs = [e for _, e in substitutions]
@@ -358,10 +352,6 @@ def lagrange_error_bounds(lower_bounds, upper_bounds, *, resolution=10):
 
 
 def lagrange_error_bounds_grid(x_edges, y_edges, theta_edges):
-    """
-    Vectorized Lagrange error bounds for every cell in the uniform grid.
-    Returns array of shape (Nx, Ny, Ntheta, 3).
-    """
     x_edges     = np.asarray(x_edges)
     y_edges     = np.asarray(y_edges)
     theta_edges = np.asarray(theta_edges)
@@ -408,11 +398,6 @@ def lagrange_error_bounds_grid(x_edges, y_edges, theta_edges):
 # =====================================================================
 
 def theta_min_arc_intervals(thetas, *, eps=1e-12):
-    """
-    Returns non-wrapping theta interval(s) in [-pi, pi] covering the samples
-    Returns [(lo, hi)] normally, or [(-pi, hi), (lo, pi)] when the minimal
-    arc wraps across the -pi/pi cut
-    """
     th = np.asarray(thetas, dtype=float)
     if th.size == 0:
         return [(-np.pi, np.pi)]
@@ -461,16 +446,6 @@ def ap_labeler(r):
         return max(lo, min(hi, c))
 
     def farthest(lo, hi, c):
-        """Distance (along one axis) from c to whichever of lo/hi is
-        FARTHER -- i.e. the worst-case corner. Used for the goal AP: a
-        cell should only be labeled 'goal' if its ENTIRE extent is
-        within R_GOAL (Must semantics, per Eq. 24), not just its nearest
-        point (May semantics). Using closest-point for goal, as before,
-        would label a cell 'goal' even when only part of it has actually
-        arrived -- which is unsound, since compute_verified_set_via_fixpoint
-        treats a 'goal' label as an immediate, final success condition and
-        stops evolving that cell right there.
-        """
         return max(abs(lo - c), abs(hi - c))
 
     aps = set()
@@ -496,17 +471,6 @@ def ap_labeler(r):
 # =====================================================================
 
 class UnicycleDynamics:
-    """
-    Taylor reachability transition builder for the unicycle.
-
-    For each cell:
-      1. Linearize f at the centroid using the analytic Jacobian
-      2. Evaluate the linearization at all 8 corners
-      3. Take the AABB of the linearized images
-      4. Inflate by the Lagrange error bound (precomputed for the uniform
-         grid; recomputed on-the-fly for CEGAR child cells)
-      5. Apply theta_min_arc_intervals to handle -pi/pi wrapping
-    """
 
     def __init__(
         self,
@@ -537,14 +501,9 @@ class UnicycleDynamics:
     goal_radius = 8.0
 
     def dynamics(self, x):
-        """Point evaluation of the closed-loop dynamics. Used by cegar_loop validation."""
         return cl_system_numeric(np.asarray(x, dtype=float))
 
     def _lagrange_bound(self, r: Rect) -> np.ndarray:
-        """
-        Look up the precomputed Lagrange bound for original grid cells;
-        recompute on-the-fly for CEGAR child cells.
-        """
         cx = 0.5 * (r.xmin + r.xmax)
         cy = 0.5 * (r.ymin + r.ymax)
         cz = 0.5 * (r.zmin + r.zmax)
@@ -573,10 +532,7 @@ class UnicycleDynamics:
         )
 
     def image_bbox(self, r: Rect):
-        """
-        Conservative post-image via Taylor reachability.
-        Returns List[Rect].
-        """
+
         lower = np.array([r.xmin, r.ymin, r.zmin])
         upper = np.array([r.xmax, r.ymax, r.zmax])
 
@@ -599,11 +555,8 @@ class UnicycleDynamics:
         lin_lo = lin_imgs.min(axis=0)
         lin_hi = lin_imgs.max(axis=0)
 
-        # Taylor remainder with interval arithmetic — tighter than precomputed
-        # Lagrange bounds, and asymmetric (R_lo <= 0, R_hi >= 0 in general).
         R_lo, R_hi = taylor_remainder(lower, upper)
 
-        # Drop theta inflation when bounds are unreliable near -pi/pi cut
         if abs(R_lo[2]) > 1 or abs(R_hi[2]) > 1:
             R_lo[2] = 0.0
             R_hi[2] = 0.0
@@ -636,7 +589,6 @@ class UnicycleDynamics:
 # =====================================================================
 
 def build_abstraction(nx=None, ny=None, nz=None):
-    """Build a complete abstraction, including all leaf transitions."""
     nx = NX if nx is None else int(nx)
     ny = NY if ny is None else int(ny)
     nz = NZ if nz is None else int(nz)

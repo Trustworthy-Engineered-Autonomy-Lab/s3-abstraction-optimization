@@ -54,11 +54,11 @@ if ($ResumeExisting) {
 elseif ($ResumeLegacy) {
     $args60 += @(
         "--resume-from",
-        (Join-Path $mountainCarDir "mountaincar_60x60.pkl")
+        (Join-Path $artifactDir "legacy\mountaincar_60x60.pkl")
     )
     $args90 += @(
         "--resume-from",
-        (Join-Path $mountainCarDir "mountain_90x90.pkl")
+        (Join-Path $artifactDir "legacy\mountain_90x90.pkl")
     )
 }
 else {

@@ -69,7 +69,7 @@ def _default_checkpoint(grid_size: int) -> Path:
 
 
 def _default_gt_cache(grid_size: int, max_steps: int) -> Path:
-    return SCRIPT_DIR / (
+    return DEFAULT_ARTIFACT_DIR / "cache" / (
         f"gt_safe_unicycle_{grid_size}x{grid_size}x{grid_size}"
         f"_steps{max_steps}.pkl"
     )
@@ -296,9 +296,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--grid-size",
         type=int,
-        choices=(40, 90),
         required=True,
-        help="Cubic initial abstraction size (40 or 90).",
+        help="Positive cubic initial abstraction size.",
     )
     parser.add_argument(
         "--checkpoint",
@@ -419,6 +418,8 @@ def parse_args(argv=None):
 
     if args.time_limit_sec < 0:
         parser.error("--time-limit-sec must be nonnegative")
+    if args.grid_size <= 0:
+        parser.error("--grid-size must be positive")
     if args.safety_margin_sec < 0:
         parser.error("--safety-margin-sec must be nonnegative")
     if args.checkpoint_interval_sec < 0:

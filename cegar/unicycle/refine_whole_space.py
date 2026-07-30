@@ -19,6 +19,24 @@ from cegar_loop import run_cegar
 MODEL_CHECKPOINT_VERSION = 1
 
 
+def _replace_checkpoint_with_retry(
+    tmp_path: Path,
+    path: Path,
+    *,
+    attempts: int = 20,
+    delay_sec: float = 0.1,
+) -> None:
+    """Replace a checkpoint despite brief Windows/OneDrive file locks."""
+    for attempt in range(attempts):
+        try:
+            tmp_path.replace(path)
+            return
+        except PermissionError:
+            if attempt + 1 == attempts:
+                raise
+            time.sleep(delay_sec)
+
+
 def save_model_checkpoint(
     absys: Abstraction,
     path: str | Path,
@@ -48,7 +66,7 @@ def save_model_checkpoint(
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     with tmp_path.open("wb") as f:
         pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
-    tmp_path.replace(path)
+    _replace_checkpoint_with_retry(tmp_path, path)
     print(
         f"[CHECKPOINT] saved {len(absys.part.leaves)} leaves and "
         f"{len(absys.tr.succ)} transition sources to {path}",
@@ -865,11 +883,6 @@ if __name__ == "__main__":
 
     absys, domain = build_abstraction()
 
-    # --- FIX: actually construct and use the restricted initial domain
-    # (per Ethan) -- previously initial_domain was added as a parameter to
-    # compute_tpr/compute_recall but never passed at these call sites, so
-    # it silently defaulted to None -> fell back to the full domain,
-    # meaning NO restriction was actually applied in previous runs. ---
     initial_domain = Rect(
         float(INIT_DOMAIN_LB[0]), float(INIT_DOMAIN_UB[0]),
         float(INIT_DOMAIN_LB[1]), float(INIT_DOMAIN_UB[1]),
@@ -908,17 +921,14 @@ if __name__ == "__main__":
     recall_before = compute_recall(absys, verified_before, domain,
                                    gt_safe=gt_safe, nx_gt=60, ny_gt=60, nz_gt=NZ_GT,
                                    initial_domain=initial_domain)
-    # ORDERING:  "largest"  — largest cells first (default)
-    #            "smallest" — smallest cells first (inverted)
 
-    ORDERING = "largest"   # <-- change per run
-    RAND_SEED = 0           # <-- change for random runs (0..4)
+    ORDERING = "largest"
+    RAND_SEED = 0
     SPLIT_MODE = "auto"     
     MAX_ITERS_PER_CELL = 150
     MAX_REFINE_DEPTH = 40
     MIN_CELL_SIZE = 0.001
-    MIN_CELL_THETA = 0.001   # <-- set to None to leave theta refinement unbounded
-    # ─────────────────────────────────────────────────────────────────────────
+    MIN_CELL_THETA = 0.001
 
     cls_after = refine_one_round(
         absys=absys,
@@ -963,14 +973,14 @@ if __name__ == "__main__":
                                   gt_safe=gt_safe, nx_gt=60, ny_gt=60, nz_gt=NZ_GT,
                                   initial_domain=initial_domain)
 
-    print("\n── Summary (Table 4 format) ──────────────────────────────────────")
+    print("\n── Summary ──────────────────────────────────────")
     print(f"  Ordering:  {ORDERING!r}" + (f"  seed={RAND_SEED}" if ORDERING == "random" else ""))
     print(f"  Split mode: {SPLIT_MODE!r}   Min cell theta: {MIN_CELL_THETA}")
     print(f"  {'Metric':<28} {'Before':>10} {'After':>10}")
     print(f"  {'-'*50}")
     print(f"  {'SLP':<28} {slp_before:>10.3f} {slp_after:>10.3f}")
     print(f"  {'mSu':<28} {msu_before:>10.2f} {msu_after:>10.2f}")
-    print(f"  {'TPR (Eq.29, paper Table 4)':<28} {tpr_before:>10.3f} {tpr_after:>10.3f}")
+    print(f"  {'TPR':<28} {tpr_before:>10.3f} {tpr_after:>10.3f}")
     print(f"  {'Recall (verified/GT-safe vol)':<28} {recall_before:>10.3f} {recall_after:>10.3f}")
     print(f"  {'Leaves before CEGAR':<28} {len(unknown_before) + len(verified_before) + len(refuted_before):>10}")
     print(f"  {'Leaves after CEGAR':<28} {len(absys.part.leaves):>10}")

@@ -20,8 +20,7 @@ class Rect:
         )
 
     def split4(self, xm, ym) -> Tuple["Rect","Rect","Rect","Rect"]:
-        """Bisect x and y only (theta/z untouched). Kept for backward
-        compatibility with any caller that explicitly wants a 4-way xy split."""
+
         return (
             Rect(self.xmin, xm, self.ymin, ym, self.zmin, self.zmax),
             Rect(xm, self.xmax, self.ymin, ym, self.zmin, self.zmax),
@@ -30,13 +29,7 @@ class Rect:
         )
 
     def split_dims(self, xm=None, ym=None, zm=None) -> Tuple["Rect", ...]:
-        """
-        General splitter: bisect along any subset of {x, y, z} at the given
-        midpoint(s). Pass only the midpoints for dimensions you want to cut;
-        omitted dimensions (None) are left whole. Returns 2^k children where
-        k = number of midpoints provided (1, 2, or 3 of them).
 
-        """
         x_ranges = ((self.xmin, xm), (xm, self.xmax)) if xm is not None else ((self.xmin, self.xmax),)
         y_ranges = ((self.ymin, ym), (ym, self.ymax)) if ym is not None else ((self.ymin, self.ymax),)
         z_ranges = ((self.zmin, zm), (zm, self.zmax)) if zm is not None else ((self.zmin, self.zmax),)
@@ -364,12 +357,7 @@ class Abstraction:
 
     def _compute_succs(self, u: int, a: str) -> Set[int]:
         """
-        Compute successors using mountain-car-v3's AABB convention.
-
-        Its ``searchsorted(..., side="right")`` rule assigns an image point
-        on an internal grid line to the cell on the right. Mountain Car's
-        physical dynamics clips/reset states into the domain, so OUT is used
-        only if an image has no in-domain overlap.
+        Compute successors using AABB convention.
         """
         self._transition_source_recomputations_total = (
             getattr(self, "_transition_source_recomputations_total", 0) + 1
@@ -457,8 +445,7 @@ class Abstraction:
         """
         Split a leaf along any subset of {x, y, z} (theta = z) and
         incrementally update the transition relation for the new children
-        and any affected predecessors. enables theta-direction
-        refinement
+        and any affected predecessors.
         """
         new_uids = self.part.split_general(leaf_uid, xm=xm, ym=ym, zm=zm)
         self._update_after_split(leaf_uid, new_uids)

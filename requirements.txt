@@ -3,3 +3,7 @@ jax[cpu]
 matplotlib
 scipy
 pyModelChecking
+sympy
+mpmath
+huggingface-hub
+stable_baselines3

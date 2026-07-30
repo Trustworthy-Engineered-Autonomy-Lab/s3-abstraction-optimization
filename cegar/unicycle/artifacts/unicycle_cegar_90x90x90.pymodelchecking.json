@@ -1,10 +1,10 @@
 {
   "case_study": "unicycle",
   "checkpoint": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\unicycle\\artifacts\\unicycle_cegar_90x90x90.pkl",
-  "ground_truth": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\unicycle-taylor\\unicycle_gt_reach_regions_100.pkl",
+  "ground_truth": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\unicycle\\artifacts\\cache\\reach.pkl",
   "initial_states": 237236,
-  "kripke_construction_time_sec": 5.480196600081399,
-  "model_checking_time_sec": 16.449945500004105,
+  "kripke_construction_time_sec": 6.543948899954557,
+  "model_checking_time_sec": 15.267985299928114,
   "property": "A (safe U goal)",
   "recall": 0.7584275169686874,
   "recall_details": {

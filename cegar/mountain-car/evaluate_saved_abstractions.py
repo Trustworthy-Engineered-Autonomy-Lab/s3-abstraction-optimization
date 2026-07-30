@@ -16,9 +16,8 @@ from run_mountain_car import load_model_checkpoint
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parents[1]
 PROPERTY = "A F goal"
-DEFAULT_GT = REPO_ROOT / "mountain-car-v3" / "mc_reach_regions.pkl"
+DEFAULT_GT = SCRIPT_DIR / "artifacts" / "cache" / "reach.pkl"
 DEFAULT_CHECKPOINTS = (
     SCRIPT_DIR / "artifacts" / "mountain_car_cegar_60x60.pkl",
     SCRIPT_DIR / "artifacts" / "mountain_car_cegar_90x90.pkl",

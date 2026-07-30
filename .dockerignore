@@ -6,3 +6,7 @@ node_modules
 .env
 dist
 build
+.venv/
+.git/
+**/__pycache__/
+*.pyc

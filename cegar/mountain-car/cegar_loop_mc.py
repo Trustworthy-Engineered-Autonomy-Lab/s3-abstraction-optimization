@@ -151,9 +151,6 @@ def build_spot_kripke(
 def _parse_spot_run_to_lasso(run_str: str) -> Tuple[List[int], List[int]]:
     """
     Parse Spot's textual run format into (prefix_uids, cycle_uids).
-
-    We extract the integer state-names (uids) from the lines in Prefix/Cycle sections.
-    Any non-integer state names (e.g., init hub) are ignored.
     """
     prefix: List[int] = []
     cycle: List[int] = []
@@ -227,11 +224,6 @@ def eventually_goal_get_counterexample_lasso(
     merge_actions: bool = True,
 ) -> Optional[Tuple[List[int], List[int]]]:
     """Find a counterexample to CTL/LTL universal eventual goal.
-
-    A violation exists exactly when a non-goal cycle is reachable from an
-    initial state while remaining in non-goal states.  This graph backend
-    avoids the unavailable Spot dependency and matches ``A F goal`` for the
-    deterministic-action Mountain Car abstraction.
     """
     del merge_actions
     label_cache: Dict[int, Set[str]] = {
@@ -393,9 +385,6 @@ def validate_lasso_by_set_propagation(
 
     dyn = absys.dyn_by_action[action]
 
-    # For 3D cells use center point only — 8-corner propagation is too
-    # conservative and drives boundary corners out of domain immediately
-    # For 2D cells keep 4-corner propagation (exact for affine dynamics)
     r0 = absys.part.leaves[u0].rect
     if r0.zmin != r0.zmax:  # 3D
         cx = 0.5 * (r0.xmin + r0.xmax)
@@ -441,7 +430,7 @@ def validate_lasso_by_set_propagation(
 
 def split_midpoint(absys: Abstraction, leaf_uid: int) -> Tuple[int, int, int, int]:
     """Legacy xy-only midpoint split. Kept for backward compatibility;
-    run_cegar now calls split_cell (dimension-selected) instead."""
+    run_cegar now calls split_cell instead."""
     node = absys.part.leaves[leaf_uid]
     r = node.rect
     xm = 0.5 * (r.xmin + r.xmax)
@@ -465,19 +454,9 @@ def _taylor_error_terms_per_dim(absys: Abstraction, r: Rect, action: str = "step
             upper = np.array([r.xmax, r.ymax], dtype=float)
 
         R_lo, R_hi = dyn.taylor_remainder(lower, upper)
-        # magnitude of remainder contributed "at" each output dim; use as a
-        # proxy for which input half-width is driving imprecision the most.
-        # Combine with each dim's own half-width so we don't keep splitting
-        # an axis that's already essentially degenerate.
         h = 0.5 * (upper - lower)
         mag = np.abs(R_hi) + np.abs(R_lo)
-        # Weight by remaining half-width so a dimension that's already tiny
-        # isn't picked just because its remainder term happens to be large.
         weighted_partial = mag * (h > 1e-9)
-
-        # choose_split_dims always expects a length-3 (x, y, theta) array,
-        # even for genuinely-2D systems (where the z/theta axis is a
-        # degenerate 0-width placeholder). Pad rather than assume 3D.
         weighted = np.zeros(3, dtype=float)
         weighted[:len(weighted_partial)] = weighted_partial
         return weighted
@@ -494,17 +473,6 @@ def choose_split_dims(
 ) -> Tuple[bool, bool, bool]:
     """
     Decide which of (x, y, theta) to split for this cell.
-
-    mode:
-      "xy"        -- legacy behavior, always split x and y only.
-      "xyz"       -- always split all three dims (8-way split).
-      "auto"      -- (default) split the single dimension responsible for
-                     the most imprecision, falling back to "largest extent"
-                     when a Taylor-remainder-based signal isn't available.
-                     This keeps state-count growth closer to CEGAR's normal
-                     per-iteration cost (one bisection, 2 children) while
-                     still allowing theta to shrink when it's the bottleneck.
-
     """
     node = absys.part.leaves[leaf_uid]
     r = node.rect
@@ -531,9 +499,6 @@ def choose_split_dims(
     if splittable[best]:
         choice[best] = True
     else:
-        # Nothing splittable at all (shouldn't normally happen since
-        # can_refine already checked width/height before calling us) --
-        # fall back to x then y then z, whichever is available.
         for i in range(3):
             if splittable[i]:
                 choice[i] = True
@@ -566,8 +531,6 @@ def split_cell(
     zm = 0.5 * (r.zmin + r.zmax) if split_z else None
 
     if xm is None and ym is None and zm is None:
-        # Degenerate: nothing to split on. Caller's can_refine should have
-        # already prevented this; fall back to legacy xy split as a safety net.
         return absys.split_and_update(0.5 * (r.xmin + r.xmax), 0.5 * (r.ymin + r.ymax), leaf_uid)
 
     return absys.split_and_update_general(leaf_uid, xm=xm, ym=ym, zm=zm)
@@ -582,8 +545,7 @@ def can_refine(
     min_depth_theta: Optional[float] = None,
 ) -> bool:
     """
-    min_depth_theta: minimum theta extent allowed (analogous to min_width /
-    min_height but for the z/theta axis)
+    min_depth_theta: minimum theta extent allowed
     """
     if uid == absys.OUT_UID:
         return False

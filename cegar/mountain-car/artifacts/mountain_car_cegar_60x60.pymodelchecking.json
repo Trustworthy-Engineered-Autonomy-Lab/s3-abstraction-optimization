@@ -1,10 +1,10 @@
 {
   "case_study": "mountain-car",
   "checkpoint": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\mountain-car\\artifacts\\mountain_car_cegar_60x60.pkl",
-  "ground_truth": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\mountain-car-v3\\mc_reach_regions.pkl",
+  "ground_truth": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\mountain-car\\artifacts\\cache\\reach.pkl",
   "initial_states": 4900,
-  "kripke_construction_time_sec": 0.020777600002475083,
-  "model_checking_time_sec": 0.15208939998410642,
+  "kripke_construction_time_sec": 0.019158100010827184,
+  "model_checking_time_sec": 0.1389101999811828,
   "property": "A F goal",
   "recall": 0.12972222222222235,
   "recall_details": {

@@ -1,13 +1,8 @@
-import pickle as pkl
-import main_mountain_car_model_checking
-import cegar_loop_mc
-import abstraction
-import refine_whole_space
+"""Compatibility entry point for the Mountain Car CEGAR smoke test."""
+
+from smoke_test import main
+
 
 if __name__ == "__main__":
-
-    with open("cegar/mountain-car/mountaincar_60x60.pkl", "rb") as f:
-        data = pkl.load(f)
-
-    print(type(data))
+    raise SystemExit(main())
     

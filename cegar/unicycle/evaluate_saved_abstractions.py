@@ -17,13 +17,8 @@ from refine_whole_space_pi import load_model_checkpoint
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parents[1]
 PROPERTY = "A (safe U goal)"
-DEFAULT_GT = (
-    REPO_ROOT
-    / "unicycle-taylor"
-    / "unicycle_gt_reach_regions_100.pkl"
-)
+DEFAULT_GT = SCRIPT_DIR / "artifacts" / "cache" / "reach.pkl"
 DEFAULT_CHECKPOINTS = (
     SCRIPT_DIR / "artifacts" / "unicycle_cegar_40x40x40.pkl",
     SCRIPT_DIR / "artifacts" / "unicycle_cegar_90x90x90.pkl",

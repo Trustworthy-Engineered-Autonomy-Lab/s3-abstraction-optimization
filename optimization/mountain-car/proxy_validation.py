@@ -43,7 +43,7 @@ def parse_args():
         default=RERUN,
         help="Re-run the experiment?",
     )
-    parser.add_argument("--samples", type=float, default=SAMPLES)
+    parser.add_argument("--samples", type=int, default=SAMPLES)
     return parser.parse_args()
 
 

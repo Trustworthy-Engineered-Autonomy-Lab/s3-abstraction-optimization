@@ -1,10 +1,10 @@
 {
   "case_study": "synthetic",
-  "checkpoint": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\synthetic\\artifacts\\synthetic_cegar_60x60.pkl",
-  "ground_truth": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\synthetic-v3\\synthetic_reach_regions.pkl",
+  "checkpoint": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\spiral\\artifacts\\synthetic_cegar_60x60.pkl",
+  "ground_truth": "C:\\Users\\jorda\\OneDrive\\Desktop\\abstraction-training\\cegar\\spiral\\artifacts\\cache\\reach.pkl",
   "initial_states": 4900,
-  "kripke_construction_time_sec": 0.03739750001113862,
-  "model_checking_time_sec": 0.03196709998883307,
+  "kripke_construction_time_sec": 0.0396467000246048,
+  "model_checking_time_sec": 0.03182170004583895,
   "property": "A F goal",
   "recall": 0.9155863370242068,
   "recall_details": {

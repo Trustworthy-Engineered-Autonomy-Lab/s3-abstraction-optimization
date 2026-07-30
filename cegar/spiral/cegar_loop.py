@@ -32,9 +32,8 @@ def rect_depth(r: Rect) -> float:
 def _compute_reachable_from(absys: Abstraction, init_uids: Set[int]) -> Set[int]:
     """
     Forward BFS over absys.tr.succ starting from init_uids (merging across
-    all actions, matching how edges are actually added to the Kripke
-    structure below). Returns every uid reachable from init_uids, including
-    init_uids themselves and OUT_UID.
+    all actions, matching how edges are actually added to the kripke
+    structure below).
     """
     reachable: Set[int] = set()
     seed = [u for u in init_uids if u == absys.OUT_UID or u in absys.part.leaves]
@@ -225,8 +224,6 @@ def spot_get_counterexample_lasso(
 
 
     # Translate the negation of the formula using the same dict
-    # (this is required so APs match the Kripke's BDD vars)
-    # not_phi = spot.formula.Not(phi)
     f = spot.formula(phi)
     not_phi = spot.formula.Not(f)
 
@@ -287,10 +284,7 @@ def reach_avoid_get_counterexample_lasso(
             first_position[nxt] = len(walk)
             walk.append(nxt)
 
-    # Prefer a non-goal liveness cycle over OUT.  The legacy Spot parser
-    # filtered OUT from textual runs, so this ordering preserves the useful
-    # refinement behavior of the existing synthetic benchmark instead of
-    # immediately terminating on the first boundary cell.
+    # Prefer a non-goal liveness cycle over OUT
     first_bad_path: Optional[List[int]] = None
     finished: Set[int] = set()
     for initial in sorted(init_uids):
@@ -458,13 +452,8 @@ def validate_lasso_by_set_propagation(
     gt_cache_payload: Optional[dict] = None,
     verbose: bool = False,
 ) -> ValidationResult:
-    """Validate a lasso using synthetic-v3's concrete cell semantics.
-
-    First classify the initial cell exactly as synthetic-v3 does.  If it is
-    concretely safe, propagate its convex polygon along the lasso and refine
-    the first source whose abstract transition is infeasible.  A remaining
-    in-domain non-goal cycle is spurious for this contracting affine system,
-    so a cycle cell is refined.
+    """
+    Validate a lasso using synthetic-v3's concrete cell semantics.
     """
     del gt_cache_payload  # This benchmark uses the synthetic-v3 oracle below.
 
@@ -622,13 +611,6 @@ def _taylor_error_terms_per_dim(
 ):
     """
     Synthetic-safe split heuristic.
-
-    Do NOT import main.py here.
-    main.py belongs to the unicycle benchmark and loads
-    unicycle derivative caches.
-
-    For affine synthetic dynamics, just return None and
-    let choose_split_dims() fall back to largest extent.
     """
 
     return None
@@ -643,20 +625,6 @@ def choose_split_dims(
 ) -> Tuple[bool, bool, bool]:
     """
     Decide which of (x, y, theta) to split for this cell.
-
-    mode:
-      "xy"        -- legacy behavior, always split x and y only.
-      "xyz"       -- always split all three dims (8-way split).
-      "auto"      -- (default) split the single dimension responsible for
-                     the most imprecision, falling back to "largest extent"
-                     when a Taylor-remainder-based signal isn't available.
-                     This keeps state-count growth closer to CEGAR's normal
-                     per-iteration cost (one bisection, 2 children) while
-                     still allowing theta to shrink when it's the bottleneck.
-
-    Returns a 3-tuple of booleans (split_x, split_y, split_z) indicating
-    which dimensions to cut at their midpoint. Dimensions whose extent is
-    already <= min_extent are never selected, to avoid degenerate splits.
     """
     node = absys.part.leaves[leaf_uid]
     r = node.rect
@@ -674,8 +642,7 @@ def choose_split_dims(
         weighted = np.where(splittable, weighted, -np.inf)
         best = int(np.argmax(weighted))
     else:
-        # Fallback: split whichever splittable dimension is geometrically
-        # largest (matches the intuition of "cut the biggest side").
+        # split whichever splittable dimension is geometrically
         sizes = np.where(splittable, extents, -np.inf)
         best = int(np.argmax(sizes))
 
@@ -683,9 +650,7 @@ def choose_split_dims(
     if splittable[best]:
         choice[best] = True
     else:
-        # Nothing splittable at all (shouldn't normally happen since
-        # can_refine already checked width/height before calling us) --
-        # fall back to x then y then z, whichever is available.
+        # Nothing splittable at all
         for i in range(3):
             if splittable[i]:
                 choice[i] = True
@@ -783,25 +748,7 @@ def run_cegar(
     ] = None,
 ) -> CEGARResult:
     """
-    Full CEGAR loop:
-
-      repeat:
-        - Spot finds abstract counterexample lasso for phi
-        - validate lasso via set-propagation (path-consistency)
-        - if spurious: split selected cell and continue
-        - if feasible: return NOT VERIFIED (real counterexample witness at this precision)
-      until max_iters
-
-    split_mode: passed straight through to split_cell / choose_split_dims.
-      "xy" reproduces the old x/y-only bisection; "xyz" always splits all
-      three axes; "auto" (default) picks the single most-useful axis per
-      split (falls back to "largest extent" if no Taylor-remainder signal
-      is available for the current dynamics object).
-
-    min_cell_theta: analogous to min_cell_width/min_cell_height but for the
-      theta axis. Pass this if you want refinement to also stop once theta
-      extent gets small enough -- otherwise theta can in principle keep
-      splitting down toward min_extent inside choose_split_dims.
+    Full CEGAR loop
     """
     if phi is None:
         # original phi value
@@ -819,11 +766,9 @@ def run_cegar(
     last_cex: Optional[Tuple[List[int], List[int]]] = None
     iterations_completed = 0
 
-    # Local, mutable copy -- we update this after every split so that stale
     init_uids = set(init_uids)
 
     # Ensure transitions exist
-    # (caller can rebuild or rely on incremental updates from split_and_update)
     if not absys.tr.succ:
         absys.rebuild_all_transitions()
 

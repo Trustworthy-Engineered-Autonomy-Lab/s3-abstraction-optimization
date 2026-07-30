@@ -1,14 +1,3 @@
-"""
-synthetic_benchmark.py
-
-Benchmark interface for the synthetic affine system.
-
-Part 1:
-    - configuration
-    - dynamics wrapper
-    - AP labeler
-    - abstraction builder
-"""
 
 from __future__ import annotations
 
@@ -25,9 +14,9 @@ from abstraction import (
 
 import synthetic_system as ss
 
-###############################################################################
+####################################################
 # Benchmark constants
-###############################################################################
+####################################################
 
 DOMAIN_LB = np.array([-10.0, -10.0])
 DOMAIN_UB = np.array([10.0, 10.0])
@@ -57,13 +46,9 @@ DEFAULT_NY = 40
 
 FORMULA = "(!unsafe) U goal"
 
-###############################################################################
-# Dynamics wrapper
-###############################################################################
-
 class SyntheticDynamics(AffineDynamics):
     """
-    Generic AffineDynamics wrapper around synthetic_system.py.
+    Generic AffineDynamics wrapper around synthetic_system.py
     """
 
     def __init__(self):
@@ -81,7 +66,7 @@ class SyntheticDynamics(AffineDynamics):
 
     def image_bbox(self, rect):
         """
-        Exact reachable AABB obtained by propagating the four corners.
+        Exact reachable AABB obtained by propagating the four corners
         """
 
         corners = np.array([
@@ -114,14 +99,6 @@ class SyntheticDynamics(AffineDynamics):
 ###############################################################################
 
 def ap_labeler(rect):
-    """
-    OUT state:
-        rect=None
-
-    A cell is a goal iff ALL corners lie inside the goal ball.
-
-    Otherwise it is simply safe.
-    """
 
     if rect is None:
         return {"unsafe"}
@@ -204,14 +181,7 @@ def state_reaches_goal(
     max_steps=200,
 ):
     """
-    Ground-truth simulation.
-
-    Because the synthetic system is deterministic and globally stable,
-    every point is simulated until
-
-        • enters goal
-        • leaves domain
-        • timeout
+    Ground-truth simulation
     """
 
     x = np.asarray(x0, dtype=float)
@@ -239,9 +209,7 @@ def cell_is_safe(
     max_steps=200,
 ):
     """
-    Conservative ground-truth:
-
-    all four corners must reach the goal.
+    Conservative ground-truth
     """
 
     corners = [
@@ -267,7 +235,7 @@ def build_gt_safe_set(
     max_steps=200,
 ):
     """
-    Returns a set of GT-safe grid cells.
+    Returns a set of GT-safe grid cells
     """
 
     print(
@@ -445,7 +413,6 @@ def compute_recall(
 
 
 def _synthetic_v3_fixed_index_range(edges, lo, hi):
-    """Exact index convention used by synthetic-v3.check_ground_truth_fast."""
     n = len(edges) - 1
     if hi <= edges[0] or lo >= edges[-1]:
         return None
@@ -464,11 +431,8 @@ def classify_partition_with_synthetic_v3_ground_truth(
     *,
     domain=DOMAIN,
 ):
-    """Label hierarchical leaves using synthetic-v3's fixed-grid rule.
-
-    A leaf is ``goal`` only when every fixed ground-truth cell with
-    positive-area overlap is labeled ``goal``.  This is the hierarchical
-    partition equivalent of synthetic-v3's ``check_ground_truth_fast``.
+    """
+    Label hierarchical leaves using synthetic-v3's fixed-grid rule.
     """
     if not gt_reach_regions:
         raise ValueError("gt_reach_regions is empty")
@@ -544,11 +508,8 @@ def compute_synthetic_v3_recall(
     initial_domain=DOMAIN,
     domain=DOMAIN,
 ):
-    """Compute the same volume recall reported by synthetic-v3.
-
-    The denominator is the volume of initial abstraction leaves classified
-    ``goal`` by the fixed ground truth.  The numerator is the portion of that
-    same volume contained in model-checked/verified initial leaves.
+    """
+    Compute the same volume recall reported by synthetic-v3
     """
     classification = classify_partition_with_synthetic_v3_ground_truth(
         absys,
@@ -628,10 +589,6 @@ def visualize_classification(
 ):
     """
     Visualize the current abstraction.
-
-    Gray      : all abstract cells
-    Green     : verified cells
-    Blue      : goal region
     """
 
     if refuted is None:

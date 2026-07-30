@@ -1,11 +1,15 @@
 FROM python:3.11-slim
+
 WORKDIR /app
-ENV PYTHONPATH=/app/src
 
-COPY requirements.txt /app/requirements.txt
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY requirements.txt .
 
-COPY . /app
+RUN python -m pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cpu torch \
+    && python -m pip install --no-cache-dir -r requirements.txt
 
-CMD ["python", "optimization/unicycle/main_s3.py"]
+COPY . .

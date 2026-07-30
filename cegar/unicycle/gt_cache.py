@@ -15,10 +15,14 @@ from main import (
 
 
 GT_CACHE_VERSION = 1
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_CACHE_DIR = SCRIPT_DIR / "artifacts" / "cache"
 
 
 def default_gt_cache_path(nx_gt: int, ny_gt: int, nz_gt: int, max_steps: int) -> Path:
-    return Path("artifacts") / f"gt_safe_unicycle_{nx_gt}x{ny_gt}x{nz_gt}_steps{max_steps}.pkl"
+    return DEFAULT_CACHE_DIR / (
+        f"gt_safe_unicycle_{nx_gt}x{ny_gt}x{nz_gt}_steps{max_steps}.pkl"
+    )
 
 
 def _rect_domain() -> Rect:
