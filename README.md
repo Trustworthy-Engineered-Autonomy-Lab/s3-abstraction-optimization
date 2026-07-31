@@ -1,9 +1,9 @@
 # $S^3$: A Smooth Simulation Surrogate for Optimizing Discrete Abstractions of Dynamical Systems
 
-This repository contains the optimization and counterexample-guided abstraction
+This repository contains the optimization (S3 and Weber baseline) and counterexample-guided abstraction
 refinement (CEGAR) experiments associated with **$S^3$: A Smooth Simulation
 Surrogate for Optimizing Discrete Abstractions of Dynamical Systems**. It
-provides three case studies—Spiral, Mountain Car, and Unicycle—and all necessary
+provides three case studies (Spiral, Mountain Car, and Unicycle) and all necessary
 code for reproducing the experiments in the paper.
 
 The code builds finite transition-system abstractions of closed-loop dynamical
