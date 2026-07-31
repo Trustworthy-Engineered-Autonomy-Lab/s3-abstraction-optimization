@@ -30,12 +30,22 @@ The forward-simulation constraint encodes soundness: every concrete behavior
 must be represented by the abstraction. The reverse-simulation objective
 measures conservatism in the other direction.
 
-The optimization code uses **S3**, a differentiable finite-horizon surrogate
-for the reverse-simulation metric. A rectilinear grid is parameterized by
+The optimization code uses **S3**: a differentiable finite-horizon surrogate
+for the reverse-simulation metric:
+
+$$
+\tilde{\sigma}^\leftarrow_H(s, \theta) = \tau_2 \log \sum_{\hat{x} \in \hat{X}} \exp \left( \frac{W_H(\hat{x})}{\tau_2}\right)
+$$
+$$
+\text{where  } W_H(\hat{x}) = \tau_1 \log \sum_{0 \le k \le H} \exp \left( \frac{r_k + \|f^k(c_0) - c_k\|}{\tau_1} \right).
+$$
+
+A rectilinear grid is parameterized by
 unconstrained gap weights $\omega_{i,j}$, which are converted into positive,
 normalized cell widths:
 
-$$\eta_{i,j}=(\overline{x}_i-\underline{x}_i)\frac{\mathrm{Softplus}(\omega_{i,j})}{\sum_{\ell}\mathrm{Softplus}(\omega_{i,\ell})}.
+$$
+\eta_{i,j}=(\overline{x}_i-\underline{x}_i)\frac{\mathrm{Softplus}(\omega_{i,j})}{\sum_{\ell}\mathrm{Softplus}(\omega_{i,\ell})}.
 $$
 
 Taylor-model interval reachability is used to overapproximate each cell's
@@ -190,7 +200,7 @@ If a minimal base image does not provide Bash, substitute `/bin/sh`. When a
 host directory is mounted at `/app`, it intentionally replaces the copy of the
 repository baked into the image for that container.
 
-## Running the Rxperiments
+## Running the Experiments
 
 Choose one of the three case-study directories:
 
@@ -213,7 +223,7 @@ On Windows PowerShell, the equivalent navigation command is
 `cd optimization\spiral`. Replace `spiral` with `mountain-car` or `unicycle`
 to run the other case studies.
 
-### S3 optimization
+### Running S3 optimization
 
 ```bash
 python -u main_s3.py --shape 20 --horizon 3 --steps 100
@@ -238,7 +248,15 @@ statistics.
 Use `python -u main_s3.py --help` for the defaults encoded by a particular case
 study.
 
-### Proxy validation
+### Running Proxy validation
+
+Replicate the experiments in the paper:
+
+```bash
+python -u proxy_validation.py --no-rerun
+```
+
+Or re-run the full sample collection and bootstrapping pipeline with different parameters. For example:
 
 ```bash
 python -u proxy_validation.py --shape 20 --samples 100 --rerun
@@ -261,7 +279,7 @@ The first Mountain Car run may need to retrieve the pretrained DDPG policy if
 it is not already cached. Reachability data, actor derivatives, and proxy
 validation samples are stored below the case study's `artifacts/` directory.
 
-### Weber baseline
+### Running the Weber baseline
 
 ```bash
 python -u weber_baseline.py --shape 20 --horizon 3
@@ -277,11 +295,10 @@ cell volume fixed, then builds and evaluates the resulting abstraction.
 
 ### Running CEGAR
 
-Each CEGAR case study exposes a common `smoke_test.py` interface. Despite its
-name, this is also the simplest entry point for a longer run: it can either
-build and save a new abstraction or load and analyze an existing one.
+Each CEGAR case study has a `smoke_test.py` interface, where the user can 
+either build and save a new abstraction or load and analyze an existing one.
 
-Choose a case study:
+From `/app`, choose a case study:
 
 ```bash
 cd cegar/spiral
@@ -289,13 +306,13 @@ cd cegar/spiral
 # or: cd cegar/unicycle
 ```
 
-For a two-dimensional case study:
+To run CEGAR refinement on either of the two-dimensional case studies:
 
 ```bash
 python -u smoke_test.py --shape 60 --time-limit-sec 10800 --max-total-states 4900 --output artifacts/my_cegar_60x60.pkl
 ```
 
-For a three-dimensional Unicycle case study:
+For the three-dimensional Unicycle case study:
 
 ```bash
 python -u smoke_test.py --shape 40 --time-limit-sec 10800 --max-total-states 125000 --output artifacts/my_cegar_40x40x40.pkl
@@ -359,19 +376,4 @@ native-size and fixed-reference ground-truth calculations. Run
 `python -u smoke_test.py --help` inside a case-study directory for its exact
 options and defaults.
 
-The checked properties are:
-
-- Spiral: universal eventual reachability of the goal while respecting the
-  modeled domain.
-- Mountain Car: universal eventual reachability of the goal position.
-- Unicycle: universal safety-until-goal,
-  \(\mathrm{A}(\mathit{safe}\ \mathrm{U}\ \mathit{goal})\).
-
-The case-study directories also retain their longer-running Python and
-PowerShell entry points for batch experiments:
-
-| Case study | Python entry point | PowerShell batch runner |
-|---|---|---|
-| Spiral | `run_synthetic.py` | `run_synthetic_models.ps1` |
-| Mountain Car | `run_mountain_car.py` | `run_mountain_car_models.ps1` |
-| Unicycle | `refine_whole_space_pi.py` | `run_cegar_models.ps1` |
+See the paper's supplementary material for the exact linear temporal logic formulae.
