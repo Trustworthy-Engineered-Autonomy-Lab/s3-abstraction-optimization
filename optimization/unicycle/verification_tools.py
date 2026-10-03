@@ -197,14 +197,14 @@ def get_gt_reach_avoid_regions(domain_lb, domain_ub, grid_resolution=101, verbos
                 if not reached_terminal:
                     gt_reach_regions[(i, j, k)] = 'unk'
                 
-                if verbose and (count % 10000 == 0):
+                if verbose and (count % 1000 == 0):
                     print(f"    > Processed {count} / {total_cells} regions...")
                 count += 1
     
     return gt_reach_regions
 
 
-def get_gt_reach_regions(domain_lb, domain_ub, grid_resolution=101, verbose=False):
+def get_gt_reach_regions(domain_lb, domain_ub, grid_resolution=21, verbose=False):
 
     # Environment details
     obs_center = np.array([25.0, 25.0])
@@ -263,7 +263,7 @@ def get_gt_reach_regions(domain_lb, domain_ub, grid_resolution=101, verbose=Fals
                 if not reached_terminal:
                     gt_reach_regions[(i, j, k)] = 'unk'
                 
-                if verbose and (count % 10000 == 0):
+                if verbose and (count % 1000 == 0):
                     print(f"    > Processed {count} / {total_cells} regions...")
                 count += 1
     
@@ -275,12 +275,15 @@ def check_ground_truth_fast(
         shape,
         domain_lb,
         domain_ub,
-        gt_reach_regions
+        gt_reach_regions,
+        edges=None
         ):
 
     """
     Classify abstraction cells according to "concrete" satisfaction. Returns a dict that
     labels each cell (by its scalar cell ID) as either "goal" or "fail".
+    If edges = (x_edges, y_edges, theta_edges) is given, it is used instead of
+    deriving the grid from params.
     """
 
     if not gt_reach_regions:
@@ -290,7 +293,10 @@ def check_ground_truth_fast(
     x1_min, x2_min, x3_min = domain_lb
     x1_max, x2_max, x3_max = domain_ub
 
-    x_edges, y_edges, theta_edges = uo.extract_grid_params(params, shape, domain_lb, domain_ub)
+    if edges is None:
+        x_edges, y_edges, theta_edges = uo.extract_grid_params(params, shape, domain_lb, domain_ub)
+    else:
+        x_edges, y_edges, theta_edges = edges
 
     # Infer fixed grid resolution per axis from keys.
     sample_key = next(iter(gt_reach_regions.keys()))
@@ -385,11 +391,163 @@ def check_ground_truth_fast(
 # Section to test above methods
 # =====================================================================
 
+def plot_verification_slice(
+        sat_init_states,
+        init_states,
+        ground_truth_check,
+        x_edges,
+        y_edges,
+        theta_edges,
+        save_path,
+        theta_slice=0.0,
+        show=False):
+    """
+    Colors the initial cells of one theta slice by verification outcome.
+    """
+
+    import matplotlib
+    if not show:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+    from matplotlib.patches import Patch
+
+    n1, n2, n3 = len(x_edges) - 1, len(y_edges) - 1, len(theta_edges) - 1
+    k = int(np.clip(np.searchsorted(theta_edges, theta_slice, side='right') - 1, 0, n3 - 1))
+    init_set, sat_set = set(init_states), set(sat_init_states)
+
+    # 0: not initial, 1: verified, 2: gt-satisfying but missed, 3: gt-failing
+    grid = np.zeros((n2, n1))
+    for i in range(n1):
+        for j in range(n2):
+            cid = ua.cell_to_id(i, j, k, n1, n2, n3)
+            if cid not in init_set:
+                continue
+            if cid in sat_set:
+                grid[j, i] = 1
+            elif ground_truth_check[cid][0] == "goal":
+                grid[j, i] = 2
+            else:
+                grid[j, i] = 3
+
+    colors = ['#eeeeee', '#2ca02c', '#ff7f0e', '#d62728']
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.pcolormesh(x_edges, y_edges, grid, cmap=ListedColormap(colors), vmin=0, vmax=3)
+    ax.add_patch(plt.Circle((40.0, 20.0), 8.0, fill=False, ec='green', lw=2))
+    ax.add_patch(plt.Circle((25.0, 25.0), 5.0, fill=False, ec='black', lw=2))
+    ax.set_aspect('equal')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_title(f'Verification of A(safe U goal), '
+                 f'theta in [{theta_edges[k]:.2f}, {theta_edges[k+1]:.2f}]')
+    ax.legend(handles=[
+        Patch(color=colors[0], label='not an initial cell'),
+        Patch(color=colors[1], label='verified'),
+        Patch(color=colors[2], label='ground-truth goal, not verified (conservatism)'),
+        Patch(color=colors[3], label='ground-truth fail'),
+    ], loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    if show:
+        plt.show()
+    plt.close(fig)
+
+
 if __name__ == "__main__":
 
+    import argparse
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(
+        description="Build the unicycle abstraction on a uniform grid, "
+                    "model check A(safe U goal), and report the results."
+    )
+    parser.add_argument("--shape", type=int, default=20)
+    parser.add_argument("--show", action="store_true")
+    cli_args = parser.parse_args()
+
     # Fixed abstraction and environment settings
-    abstraction_shape = [50, 50, 50]
+    abstraction_shape = [cli_args.shape] * 3
     domain_lb = np.array([0.0, 0.0, -np.pi])
     domain_ub = np.array([50.0, 50.0, np.pi])
+    init_domain_lb = np.array([0.0, 0.0, -np.pi/4])
+    init_domain_ub = np.array([50.0, 50.0, np.pi/4])
+    params = jnp.zeros(sum(abstraction_shape))  # zero gap-params: uniform grid
 
-    gt_reach_regions = get_gt_reach_regions(domain_lb, domain_ub, verbose=True)
+    base_dir = Path(__file__).parent / 'artifacts'
+    gt_reach_fname = base_dir / 'cache' / 'reach.pkl'
+
+    # Ground-truth reachability, cached on disk
+    if gt_reach_fname.exists():
+        with open(gt_reach_fname, "rb") as f:
+            gt_reach_regions = pkl.load(f)
+    else:
+        gt_reach_regions = get_gt_reach_regions(domain_lb, domain_ub, verbose=True)
+        gt_reach_fname.parent.mkdir(parents=True, exist_ok=True)
+        with open(gt_reach_fname, "wb") as f:
+            pkl.dump(gt_reach_regions, f)
+
+    # Build the abstraction
+    x_edges, y_edges, theta_edges = [
+            np.linspace(lb, ub, n + 1)
+            for lb, ub, n in zip(domain_lb, domain_ub, abstraction_shape)
+        ]
+    _, init_states = ua.init_cells_to_ids(
+        init_domain_lb, init_domain_ub, x_edges, y_edges, theta_edges)
+    t0 = time.perf_counter()
+    kripke_components = ua.build_abstraction(
+        x_edges, y_edges, theta_edges, verbose=True)
+    build_time = time.perf_counter() - t0
+    kripke_structure = pmc.Kripke(
+        S=kripke_components['kripke_states'],
+        S0=init_states,
+        R=list(kripke_components['kripke_transitions']),
+        L=kripke_components['kripke_labels'])
+
+    # Model check
+    t0 = time.perf_counter()
+    sat_init_states = model_check_kripke(kripke_structure)
+    check_time = time.perf_counter() - t0
+
+    # Compare against ground truth by initial-state volume
+    ground_truth_check = check_ground_truth_fast(
+        params, abstraction_shape, domain_lb, domain_ub, gt_reach_regions,
+        edges=(x_edges, y_edges, theta_edges))
+    init_set, sat_set = set(init_states), set(sat_init_states)
+    init_vol = sum(ground_truth_check[s][1] for s in init_states)
+    mc_vol = sum(ground_truth_check[s][1] for s in sat_init_states)
+    gt_sat = [s for s in init_states if ground_truth_check[s][0] == "goal"]
+    gt_vol = sum(ground_truth_check[s][1] for s in gt_sat)
+    unsound = [s for s in sat_init_states if ground_truth_check[s][0] != "goal"]
+
+    stats = ua.summarize_abstraction(kripke_components)
+    print("Model statistics")
+    print(f"  States:                    {stats['states']:,}")
+    print(f"  Transitions:               {stats['transitions']:,}")
+    print(f"  Out-degree (mean/min/max): {stats['out_degree_mean']:.2f} / "
+          f"{stats['out_degree_min']} / {stats['out_degree_max']}")
+    print(f"  Cell self-loops:           {stats['cell_self_loops']:,}")
+    print(f"  Edges into OOB state:      {stats['edges_to_oob']:,}")
+    print(f"  Labels:                    {stats['label_counts']}")
+    print(f"  Build time:                {build_time:.2f}s")
+
+    print("\nModel checking: A (safe U goal)")
+    print(f"  Initial cells:             {len(init_set):,}")
+    print(f"  Verified initial cells:    {len(sat_set):,} "
+          f"({len(sat_set) / len(init_set):.1%})")
+    print(f"  Ground-truth goal cells:   {len(gt_sat):,} "
+          f"({len(gt_sat) / len(init_set):.1%})")
+    print(f"  Verified volume fraction:  {mc_vol / init_vol:.1%}")
+    print(f"  Recall (vs. ground truth): "
+          f"{mc_vol / gt_vol if gt_vol > 0 else float('nan'):.4f}")
+    print(f"  Verified, GT not 'goal':   {len(unsound)} "
+          f"(goal-labeled cells at the goal boundary that overlap a coarser GT cell)")
+    print(f"  Model check time:          {check_time:.2f}s")
+
+    out_dir = base_dir / 'demo'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    save_path = out_dir / 'verification_slice.png'
+    plot_verification_slice(
+        sat_init_states, init_states, ground_truth_check,
+        x_edges, y_edges, theta_edges, save_path, show=cli_args.show)
+    print(f"\nSaved figure to {save_path}")

@@ -459,8 +459,235 @@ def kripke_to_dicts(kripke_components, x_edges, y_edges, theta_edges):
 # Section for testing the above methods
 # =====================================================================
 
+def summarize_abstraction(kripke_components):
+    """
+    Computes basic size and structure statistics of the abstraction.
+    """
+
+    states = kripke_components['kripke_states']
+    transitions = kripke_components['kripke_transitions']
+    labels = kripke_components['kripke_labels']
+    oob_id = states[-1]
+
+    out_degree = {s: 0 for s in states}
+    self_loops = 0
+    oob_edges = 0
+    for src, dst in transitions:
+        out_degree[src] += 1
+        if src == dst and src != oob_id:
+            self_loops += 1
+        if dst == oob_id and src != oob_id:
+            oob_edges += 1
+    degrees = np.array(list(out_degree.values()))
+
+    label_counts = {}
+    for s in states:
+        for lab in labels[s]:
+            label_counts[lab] = label_counts.get(lab, 0) + 1
+
+    return {
+        'states': len(states),
+        'transitions': len(transitions),
+        'out_degree_mean': float(degrees.mean()),
+        'out_degree_min': int(degrees.min()),
+        'out_degree_max': int(degrees.max()),
+        'deadlock_states': int((degrees == 0).sum()),
+        'cell_self_loops': self_loops,
+        'edges_to_oob': oob_edges,
+        'label_counts': label_counts,
+    }
+
+
+def locate_cell(state, x_edges, y_edges, theta_edges):
+    """
+    Returns the id of the cell containing a concrete state, or the
+    out-of-bounds id if the position leaves the (x, y) domain.
+    """
+
+    n1, n2, n3 = len(x_edges) - 1, len(y_edges) - 1, len(theta_edges) - 1
+    x, y, th = state
+    if not (x_edges[0] <= x <= x_edges[-1] and y_edges[0] <= y <= y_edges[-1]):
+        return n1 * n2 * n3
+    th = float(wrap_to_pi(th))
+    i = int(np.clip(np.searchsorted(x_edges, x, side='right') - 1, 0, n1 - 1))
+    j = int(np.clip(np.searchsorted(y_edges, y, side='right') - 1, 0, n2 - 1))
+    k = int(np.clip(np.searchsorted(theta_edges, th, side='right') - 1, 0, n3 - 1))
+    return cell_to_id(i, j, k, n1, n2, n3)
+
+
+def simulate_concrete(x0, horizon):
+    """
+    Rolls out the concrete closed-loop system; returns (horizon+1, 3).
+    """
+
+    traj = [np.asarray(x0, dtype=float)]
+    for _ in range(horizon):
+        traj.append(uss.cl_system_numeric(traj[-1]))
+    return np.array(traj)
+
+
+def abstract_frontiers(successors, start_id, horizon):
+    """
+    Exact set of abstract states reachable at each step from start_id.
+    """
+
+    frontiers = [{start_id}]
+    for _ in range(horizon):
+        nxt = set()
+        for q in frontiers[-1]:
+            nxt |= successors[q]
+        frontiers.append(nxt)
+    return frontiers
+
+
+def sample_abstract_rollouts(successors, start_id, horizon, n_rollouts, rng):
+    """
+    Random abstract paths (one uniformly chosen successor per step).
+    """
+
+    paths = []
+    for _ in range(n_rollouts):
+        path = [start_id]
+        for _ in range(horizon):
+            path.append(int(rng.choice(sorted(successors[path[-1]]))))
+        paths.append(path)
+    return paths
+
+
+def plot_overlay(traj, frontiers, rollouts, cells, x_edges, y_edges, *,
+                 goal_center, goal_radius, obs_center, obs_radius,
+                 save_path, show=True):
+    """
+    Concrete trajectory over the abstract reachable cells (x-y plane).
+    """
+
+    import matplotlib
+    if not show:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Circle, Rectangle
+
+    horizon = len(frontiers) - 1
+    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(13, 6),
+                                  gridspec_kw={'width_ratios': [2, 1]})
+    cmap = plt.get_cmap("viridis")
+
+    # Project each frontier cell to its (x, y) footprint, one patch per step
+    for t, frontier in enumerate(frontiers):
+        footprints = {
+            (cells[q][0][0], cells[q][0][1], cells[q][1][0], cells[q][1][1])
+            for q in frontier if cells[q] is not None
+        }
+        for (x0, y0, x1, y1) in footprints:
+            ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0,
+                                   facecolor=cmap(t / max(horizon, 1)),
+                                   alpha=0.12, edgecolor='none'))
+
+    for path in rollouts:
+        pts = np.array([[(cells[q][0][0] + cells[q][1][0]) / 2,
+                         (cells[q][0][1] + cells[q][1][1]) / 2]
+                        if cells[q] is not None else [np.nan, np.nan]
+                        for q in path])
+        ax.plot(pts[:, 0], pts[:, 1], '-', color='gray', lw=0.7, alpha=0.6)
+
+    ax.add_patch(Circle(goal_center, goal_radius, fill=False, ec='green', lw=2))
+    ax.add_patch(Circle(obs_center, obs_radius, fill=False, ec='red', lw=2))
+    ax.plot(traj[:, 0], traj[:, 1], 'k.-', lw=2, label='concrete trajectory')
+    ax.plot(*traj[0, :2], 'ko', ms=9, mfc='none', label='start')
+    ax.set_xlim(x_edges[0], x_edges[-1])
+    ax.set_ylim(y_edges[0], y_edges[-1])
+    ax.set_aspect('equal')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_title(f'Abstract reachable cells (colored by step 0-{horizon}, '
+                 f'x-y projection)')
+    ax.legend(loc='upper left')
+
+    sizes = [len(f) for f in frontiers]
+    ax2.semilogy(range(len(sizes)), sizes, 'o-')
+    ax2.set_xlabel('step')
+    ax2.set_ylabel('# abstract states reachable')
+    ax2.set_title('Nondeterministic fan-out')
+    ax2.grid(True, which='both', alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    if show:
+        plt.show()
+    plt.close(fig)
+
+
 if __name__ == "__main__":
 
-    abstraction_shape = [20, 20, 20]
+    import argparse
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(
+        description="Build the unicycle abstraction, summarize it, and "
+                    "overlay concrete and abstract rollouts."
+    )
+    parser.add_argument("--shape", type=int, default=20)
+    parser.add_argument("--horizon", type=int, default=10)
+    parser.add_argument("--rollouts", type=int, default=10)
+    parser.add_argument("--x0", type=float, nargs=3, default=[5.0, 10.0, 0.0])
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--show", action="store_true")
+    cli_args = parser.parse_args()
+
+    abstraction_shape = [cli_args.shape] * 3
     domain_lb = np.array([0.0, 0.0, -np.pi])
-    domain_ub = np.array([50.0, 40.0, np.pi])
+    domain_ub = np.array([50.0, 50.0, np.pi])
+    goal_center, goal_radius = np.array([40.0, 20.0]), 8.0
+    obs_center, obs_radius = np.array([25.0, 25.0]), 5.0
+
+    # Build the abstraction on a uniform grid
+    x_edges, y_edges, theta_edges = [
+        np.linspace(lb, ub, n + 1)
+        for lb, ub, n in zip(domain_lb, domain_ub, abstraction_shape)
+    ]
+    kripke_components = build_abstraction(
+        x_edges, y_edges, theta_edges,
+        verbose=True,
+        goal_center=goal_center, goal_radius=goal_radius,
+        obs_center=obs_center, obs_radius=obs_radius,
+    )
+
+    # Model statistics
+    stats = summarize_abstraction(kripke_components)
+    print("Model statistics")
+    print(f"  States:                 {stats['states']:,}")
+    print(f"  Transitions:            {stats['transitions']:,}")
+    print(f"  Out-degree (mean/min/max): {stats['out_degree_mean']:.2f} / "
+          f"{stats['out_degree_min']} / {stats['out_degree_max']}")
+    print(f"  Cell self-loops:        {stats['cell_self_loops']:,}")
+    print(f"  Edges into OOB state:   {stats['edges_to_oob']:,}")
+    print(f"  Deadlock states:        {stats['deadlock_states']}")
+    print(f"  Labels:                 {stats['label_counts']}\n")
+
+    # Concrete trajectory and its abstract cells
+    successors, cells = kripke_to_dicts(
+        kripke_components, x_edges, y_edges, theta_edges)
+    traj = simulate_concrete(cli_args.x0, cli_args.horizon)
+    traj_ids = [locate_cell(s, x_edges, y_edges, theta_edges) for s in traj]
+
+    # Abstract reachable sets from the start cell; check soundness
+    frontiers = abstract_frontiers(successors, traj_ids[0], cli_args.horizon)
+    print("Step | concrete cell | abstract states reachable | contained")
+    for t, (cid, fr) in enumerate(zip(traj_ids, frontiers)):
+        print(f"  {t:2d} | {cid:13d} | {len(fr):25d} | {cid in fr}")
+    assert all(cid in fr for cid, fr in zip(traj_ids, frontiers)), \
+        "Concrete trajectory left the abstract reachable set"
+
+    rollouts = sample_abstract_rollouts(
+        successors, traj_ids[0], cli_args.horizon,
+        cli_args.rollouts, np.random.default_rng(cli_args.seed))
+
+    out_dir = Path(__file__).parent / 'artifacts' / 'demo'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    save_path = out_dir / 'abstraction_overlay.png'
+    plot_overlay(
+        traj, frontiers, rollouts, cells, x_edges, y_edges,
+        goal_center=goal_center, goal_radius=goal_radius,
+        obs_center=obs_center, obs_radius=obs_radius,
+        save_path=save_path, show=cli_args.show)
+    print(f"\nSaved figure to {save_path}")
