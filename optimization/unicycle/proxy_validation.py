@@ -73,20 +73,40 @@ def collect_data(fname, cli_args):
     args['domain_ub'] = domain_ub
     args['temp_in'] = cli_args.temp_1
     args['temp_out'] = cli_args.temp_2
+    # args['inflation_coefs'] = np.array([
+    #     50.0/cli_args.shape/2, 50.0/cli_args.shape/2, 2*np.pi/cli_args.shape/2
+    # ])
+    # Inflation order: x, y, theta (theta is measured in radians).
+    # args['inflation_coefs'] = np.array([
+    #             0.0, 0.0, 0.0
+    #         ])
+    # args['inflation_coefs'] = np.array([
+    #         50.0/cli_args.shape/2, 50.0/cli_args.shape/2, 2*np.pi/cli_args.shape/2
+    #     ])
+    # args['inflation_coefs'] = np.array([
+    #     50.0/cli_args.shape, 50.0/cli_args.shape, 2*np.pi/cli_args.shape
+    # ])
+    # args['inflation_coefs'] = np.array([
+    #         (cli_args.shape+1) * 50.0/(2 * cli_args.shape),
+    #         (cli_args.shape+1) * 50.0/(2 * cli_args.shape),
+    #         (cli_args.shape+1) * 2*np.pi/(2 * cli_args.shape)
+    #     ])
     args['inflation_coefs'] = np.array([
-        50.0/cli_args.shape/2, 50.0/cli_args.shape/2, 2*np.pi/cli_args.shape/2
-    ])
+                50.0,
+                50.0,
+                2*np.pi
+            ])
 
     # Hyperparameters of the proxy
-    args = {}
-    args['shape'] = abstraction_shape
-    args['domain_lb'] = domain_lb
-    args['domain_ub'] = domain_ub
-    args['temp_in'] = 0.5
-    args['temp_out'] = 0.5
-    args['inflation_coefs'] = np.array([1.25, 1.25, 0.16])
+    # args = {}
+    # args['shape'] = abstraction_shape
+    # args['domain_lb'] = domain_lb
+    # args['domain_ub'] = domain_ub
+    # args['temp_in'] = TEMP_1
+    # args['temp_out'] = TEMP_2
+    # args['inflation_coefs'] = np.array([1.25, 1.25, 0.16])
 
-    horizons = [1, 2, 3, 4, 5]
+    horizons = [3]
 
     # Instantiate random parameters
     num_samples = cli_args.samples
@@ -201,6 +221,14 @@ def mean_error_stat(x, y, axis=-1):
 
 def mean_abs_error_stat(x, y, axis=-1):
     return np.mean(np.abs(x - y), axis=axis)
+
+
+def mean_percent_error_stat(proxy, epsilon, axis=-1):
+    """Average per-sample |proxy - epsilon| / epsilon, expressed as a percent."""
+    epsilon = np.asarray(epsilon)
+    if np.any(epsilon == 0):
+        raise ValueError("Percent error is undefined for zero epsilon values.")
+    return 100.0 * np.mean(np.abs(proxy - epsilon) / epsilon, axis=axis)
 
 
 def bootstrap_mn(x):
@@ -318,6 +346,28 @@ def bootstrap_errors(x, y):
         ci_abs_error,
     )
 
+
+def bootstrap_percent_error(proxy, epsilon):
+    """Return mean percent error, 95% BCa CI offsets, and CI bounds."""
+    rng = np.random.default_rng(12345)
+    percent_error = mean_percent_error_stat(proxy, epsilon)
+    res = stats.bootstrap(
+        (proxy, epsilon),
+        mean_percent_error_stat,
+        paired=True,
+        vectorized=True,
+        method="BCa",
+        confidence_level=0.95,
+        n_resamples=20_000,
+        rng=rng,
+    )
+    ci = np.array([
+        res.confidence_interval.low,
+        res.confidence_interval.high,
+    ])
+    return percent_error, ci - percent_error, ci
+
+
 # =====================================================================
 # Fancy display helper
 # =====================================================================
@@ -371,17 +421,22 @@ def print_report(data):
         print("\n  Errors (proxy - target)")
         print(
             f"    {'Target':<26} {'Mean error (95%)':>29} "
-            f"{'Mean abs. error (95%)':>35}"
+            f"{'Mean abs. error (95%)':>35} "
+            f"{'Mean percent error (95%)':>35}"
         )
-        print(f"    {'-' * 26} {'-' * 29} {'-' * 35}")
+        print(f"    {'-' * 26} {'-' * 29} {'-' * 35} {'-' * 35}")
         for target_name, target_values in errors:
             mean_error, error_diff, _, mean_abs_error, abs_error_diff, _ = bootstrap_errors(
+                proxies[i], target_values
+            )
+            percent_error, percent_error_diff, _ = bootstrap_percent_error(
                 proxies[i], target_values
             )
             print(
                 f"    {target_name:<26} "
                 f"{format_estimate(mean_error, error_diff):>29} "
-                f"{format_estimate(mean_abs_error, abs_error_diff):>35}"
+                f"{format_estimate(mean_abs_error, abs_error_diff):>35} "
+                f"{format_estimate(percent_error, percent_error_diff, unit='%'):>35}"
             )
 
         proxy_time, proxy_time_diff, _ = bootstrap_mn(proxy_times[i])

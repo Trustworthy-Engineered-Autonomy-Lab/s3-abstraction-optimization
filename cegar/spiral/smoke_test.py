@@ -13,12 +13,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ARTIFACT_DIR = SCRIPT_DIR / "artifacts"
 DEFAULT_GT_CACHE = ARTIFACT_DIR / "cache" / "reach.pkl"
 
-SHAPE = 10
-TIME_LIMIT_SEC = 5.0
+SHAPE = 70
+TIME_LIMIT_SEC = 10.0
 CHECKPOINT_INTERVAL_SEC = 900.0
 MAX_ITERS_PER_CELL = 150
 MAX_REFINE_DEPTH = 40
 MIN_CELL_SIZE = 1e-6
+DEFAULT_MAX_TOTAL_STATES = 100000
 
 
 def positive_int(value: str) -> int:
@@ -81,6 +82,7 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--max-total-states",
+        default=DEFAULT_MAX_TOTAL_STATES,
         type=positive_int,
         help="Live-cell cap; the runner default is (shape + 10)^2.",
     )

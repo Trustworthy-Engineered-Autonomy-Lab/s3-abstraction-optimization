@@ -21,12 +21,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ARTIFACT_DIR = SCRIPT_DIR / "artifacts"
 DEFAULT_GT_CACHE = ARTIFACT_DIR / "cache" / "reach.pkl"
 
-DEFAULT_SHAPE = 10
-DEFAULT_TIME_LIMIT_SEC = 5.0
+DEFAULT_SHAPE = 80
+DEFAULT_TIME_LIMIT_SEC = 100.0
 DEFAULT_CHECKPOINT_INTERVAL_SEC = 60.0
 DEFAULT_MAX_ITERS = 10
 DEFAULT_MAX_DEPTH = 25
 DEFAULT_MIN_SIZE = 1e-5
+DEFAULT_MAX_TOTAL_STATES = 100000
 
 
 def default_output_path(shape: int) -> Path:
@@ -76,6 +77,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--max-total-states",
         type=int,
+        default=DEFAULT_MAX_TOTAL_STATES,
         help=(
             "Optional live-state cap. By default the runner uses "
             "(shape + 10)^2."

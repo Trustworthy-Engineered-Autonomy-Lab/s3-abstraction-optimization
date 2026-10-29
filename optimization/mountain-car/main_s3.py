@@ -22,14 +22,14 @@ import argparse
 # User-defined settings
 # =====================================================================
 
-SHAPE = 70
+SHAPE = 100
 HORIZON = 3
 TEMP_1 = 0.1
 TEMP_2 = 0.1
-SIGMA = 0.1
+SIGMA = 0.0
 EVAL_INIT = True
 LR = 1.0
-STEPS = 100
+STEPS = 500
 
 def parse_args():
     parser = argparse.ArgumentParser(

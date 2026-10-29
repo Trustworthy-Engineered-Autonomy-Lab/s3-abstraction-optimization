@@ -16,9 +16,10 @@ from refine_whole_space_pi import main as run_cegar
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_ARTIFACT_DIR = SCRIPT_DIR / "artifacts"
-DEFAULT_SHAPE = 5
+DEFAULT_SHAPE = 50
 DEFAULT_GT_STEPS = 10
-DEFAULT_TIME_LIMIT_SEC = 5.0
+DEFAULT_TIME_LIMIT_SEC = 1000.0
+DEFAULT_MAX_TOTAL_STATES = 10000000
 
 
 def positive_int(value: str) -> int:
@@ -109,6 +110,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--max-total-states",
+        default=DEFAULT_MAX_TOTAL_STATES,
         type=positive_int,
         help="Optional live-cell limit; otherwise the production runner uses (N+10)^3.",
     )

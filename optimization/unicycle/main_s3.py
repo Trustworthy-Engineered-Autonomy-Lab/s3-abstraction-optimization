@@ -25,8 +25,8 @@ SHAPE = 50
 HORIZON = 3
 TEMP_1 = 0.1
 TEMP_2 = 0.1
-SIGMA = 0.1
-EVAL_INIT = True
+SIGMA = 0.0
+EVAL_INIT = False
 LR = 1e-3
 STEPS = 100
 
